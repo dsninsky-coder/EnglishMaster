@@ -1,0 +1,21 @@
+{
+  "article_id": 50,
+  "title": "The Beautiful World",
+  "full_text": "Our world is full of wonderful places. There are high mountains and deep oceans. There are hot deserts and cold poles. There are green forests and yellow plains. Many animals live in these places. Elephants walk in the savanna. Penguins swim in the icy water. Whales sing in the deep sea. People from different cultures live together. We all share this one planet. We should protect it with love. Every creature has its own role in nature. We need to live in harmony. The future depends on our actions today.",
+  "sentences": [
+    {"sentence_id": 1, "english": "Our world is full of wonderful places.", "chinese": "我们的世界充满了奇妙的地方。", "target_words": ["world", "wonderful"]},
+    {"sentence_id": 2, "english": "There are high mountains and deep oceans.", "chinese": "有高山和深海。", "target_words": ["mountain", "ocean"]},
+    {"sentence_id": 3, "english": "There are hot deserts and cold poles.", "chinese": "有炎热的沙漠和寒冷的极地。", "target_words": ["desert", "pole"]},
+    {"sentence_id": 4, "english": "There are green forests and yellow plains.", "chinese": "有绿色的森林和黄色的平原。", "target_words": ["forest", "plain"]},
+    {"sentence_id": 5, "english": "Many animals live in these places.", "chinese": "许多动物生活在这些地方。", "target_words": ["animal"]},
+    {"sentence_id": 6, "english": "Elephants walk in the savanna.", "chinese": "大象在热带草原上行走。", "target_words": ["elephant", "savanna"]},
+    {"sentence_id": 7, "english": "Penguins swim in the icy water.", "chinese": "企鹅在冰冷的水中游泳。", "target_words": ["penguin"]},
+    {"sentence_id": 8, "english": "Whales sing in the deep sea.", "chinese": "鲸鱼在深海中歌唱。", "target_words": ["whale", "sea"]},
+    {"sentence_id": 9, "english": "People from different cultures live together.", "chinese": "来自不同文化的人们生活在一起。", "target_words": ["culture"]},
+    {"sentence_id": 10, "english": "We all share this one planet.", "chinese": "我们都共享这一个星球。", "target_words": ["share", "planet"]},
+    {"sentence_id": 11, "english": "We should protect it with love.", "chinese": "我们应该用爱来保护它。", "target_words": ["protect"]},
+    {"sentence_id": 12, "english": "Every creature has its own role in nature.", "chinese": "每个生物在自然界中都有自己的角色。", "target_words": ["creature", "role", "nature"]},
+    {"sentence_id": 13, "english": "We need to live in harmony.", "chinese": "我们需要和谐地生活。", "target_words": ["need", "harmony"]},
+    {"sentence_id": 14, "english": "The future depends on our actions today.", "chinese": "未来取决于我们今天的行动。", "target_words": ["future", "action"]}
+  ]
+}

@@ -1,0 +1,39 @@
+# ── Python ──
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+envs/
+.venv/
+
+# ── Databases (contain accounts / student progress — never publish) ──
+*.db
+*.sqlite
+*.sqlite3
+backend/instance/
+
+# ── Project internal memory (do not publish) ──
+.workbuddy/
+
+# ── Audio assets (excluded from core publish) ──
+*.mp3
+*.wav
+*.ogg
+
+# ── Auxiliary generation artifacts (excluded from core publish) ──
+音频生成/
+article.json
+output.csv
+output.xlsx
+tool.py
+
+# ── Env / secrets ──
+.env
+*.env
+
+# ── OS / editor ──
+.DS_Store
+Thumbs.db

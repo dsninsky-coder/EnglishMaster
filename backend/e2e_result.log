@@ -1,0 +1,10 @@
+=== 1. admin login ===
+  OK
+=== 2. list courses ===
+  total=50 published=50
+=== 3. publish all ===
+  published 50/50
+=== 4. student login ===
+  register -> 409 用户名已存在
+  OK id=7 coins=0
+=== 5. assign all courses (fault-tolerant) ===
