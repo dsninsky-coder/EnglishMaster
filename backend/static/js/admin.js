@@ -6,18 +6,70 @@ function renderAdmin(tab) {
   tab = tab || parts[1] || 'courses'
   const param = parts[2]
   let inner = ''
-  if (tab === 'courses') inner = adminCoursesInner()
+  // 各板块对应的父级 Tab（用于高亮）
+  const MAIN = ['courses', 'words', 'rewards', 'students']
+  const parentOf = {
+    coins: 'rewards', shop: 'rewards', wishes: 'rewards',
+    report: 'courses', db: 'courses', api: 'courses', account: 'courses', settings: 'courses',
+  }
+  const parentTab = MAIN.includes(tab) ? tab : (parentOf[tab] || 'courses')
+
+  if (tab === 'courses') {
+    // 听说管理：课程管理 + 系统子工具
+    inner = adminCoursesInner() + `
+      <div class="card" style="margin-top:16px">
+        <h3>系统工具</h3>
+        <p class="muted" style="font-size:13px">报表、数据库、API 分享、账号与设置等系统功能（归属听说大师相关）。</p>
+        <div class="row" style="flex-wrap:wrap;gap:8px">
+          <a class="btn ghost sm" href="#/admin/report">📊 报表</a>
+          <a class="btn ghost sm" href="#/admin/db">🗄️ 数据库</a>
+          <a class="btn ghost sm" href="#/admin/api">🔑 API分享</a>
+          <a class="btn ghost sm" href="#/admin/account">👤 账号</a>
+          <a class="btn ghost sm" href="#/admin/settings">⚙️ 设置</a>
+        </div>
+      </div>`
+  }
+  else if (tab === 'words') {
+    // 单词管理：跳转单词大师后台（服务端页面）
+    inner = `<div class="card">
+      <h3>单词管理</h3>
+      <p class="muted">单词大师使用独立的后台页面，点击进入后可管理词库、导入单词、配置考试与免错券等。</p>
+      <div class="row" style="flex-wrap:wrap;gap:10px;margin-top:10px">
+        <a class="btn" href="/admin">📚 词库 / 导入 / 考试管理</a>
+        <a class="btn ghost" href="/admin/exam">📝 考试配置</a>
+      </div>
+      <p class="hint" style="margin-top:12px">提示：单词大师后台与英语大师共用同一账号体系与金币 / 商城 / 许愿池。</p>
+    </div>`
+  }
+  else if (tab === 'rewards') {
+    // 奖励管理：金币流水 / 商店 / 许愿池
+    const sub = param || 'coins'
+    const subTabs = adminSubTabs([
+      ['#/admin/rewards/coins', '金币流水'],
+      ['#/admin/rewards/shop', '商店'],
+      ['#/admin/rewards/wishes', '许愿池'],
+    ], '#/admin/rewards/' + sub)
+    inner = subTabs + `<div id="tab-body"><div class="empty">加载中…</div></div>`
+  }
   else if (tab === 'students') inner = '<div id="tab-body"><div class="empty">加载中…</div></div>'
   else if (tab === 'coins') inner = '<div id="tab-body"><div class="empty">加载中…</div></div>'
   else if (tab === 'api') inner = '<div id="tab-body"><div class="empty">加载中…</div></div>'
   else if (tab === 'shop') inner = '<div id="tab-body"><div class="empty">加载中…</div></div>'
   else if (tab === 'wishes') inner = '<div id="tab-body"><div class="empty">加载中…</div></div>'
-  else   if (tab === 'db') inner = adminDbInner()
+  else if (tab === 'db') inner = adminDbInner()
   else if (tab === 'report') inner = '<div id="tab-body"></div>'
   else if (tab === 'account') inner = adminAccountInner()
   else if (tab === 'settings') inner = '<div id="tab-body"><div class="empty">加载中…</div></div>'
-  el('app').innerHTML = adminFrame(inner, tab)
+  else inner = adminCoursesInner()
+
+  el('app').innerHTML = adminFrame(inner, parentTab)
+
   if (tab === 'courses') loadCourseList()
+  else if (tab === 'rewards') {
+    if (param === 'shop') loadShopTab()
+    else if (param === 'wishes') loadWishesTab()
+    else loadAdminCoins()
+  }
   else if (tab === 'students') loadStudents()
   else if (tab === 'coins') loadAdminCoins()
   else if (tab === 'api') loadApiTab()

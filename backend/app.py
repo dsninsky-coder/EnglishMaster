@@ -11,7 +11,7 @@ import json
 import datetime
 import re
 
-from flask import Flask, request, jsonify, send_from_directory, render_template
+from flask import Flask, request, jsonify, send_from_directory, render_template, session
 from flask_cors import CORS
 from flask_jwt_extended import (
     JWTManager, create_access_token, jwt_required, get_jwt_identity
@@ -184,6 +184,9 @@ def login():
     u.last_active = models.utcnow()
     db.session.commit()
     token = create_access_token(identity=str(u.id))
+    # 双写 session：单词大师使用服务端 session 认证，与 JWT(SPA) 共享同一登录态
+    session['user'] = username
+    session.modified = True
     return jsonify(
         access_token=token,
         user={
@@ -1549,6 +1552,11 @@ def index():
 @app.route('/uploads/<path:path>')
 def serve_uploads(path):
     return send_from_directory(UPLOAD_DIR, path)
+
+
+# ---------------- 单词大师（独立 Blueprint，挂到主 app） ----------------
+from wordmaster import wordmaster_bp
+app.register_blueprint(wordmaster_bp)
 
 
 if __name__ == '__main__':

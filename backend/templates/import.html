@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% block title %}导入单词 - 单词大师{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h2>📥 导入单词</h2>
+    <p class="page-desc">通过 CSV 或 TXT 文件批量导入单词</p>
+</div>
+
+<div class="import-layout">
+    <!-- 左：格式说明 -->
+    <div class="format-guide">
+        <h3>📋 文件格式说明</h3>
+
+        <div class="format-section">
+            <h4>CSV 格式</h4>
+            <p>首行为表头，支持以下字段名：</p>
+            <ul>
+                <li><code>list</code> / <code>列表</code> — 所属列表名</li>
+                <li><code>word</code> / <code>单词</code> — 英文单词</li>
+                <li><code>meaning</code> / <code>释义</code> — 中文释义</li>
+            </ul>
+            <div class="code-example">
+list,word,meaning<br>
+list1,apple,苹果<br>
+list1,book,书<br>
+list2,cat,猫
+            </div>
+        </div>
+
+        <div class="format-section">
+            <h4>TXT 格式</h4>
+            <p>用 <code>[list名称]</code> 分组，每行一个单词：</p>
+            <div class="code-example">
+[list1]<br>
+apple=苹果<br>
+book=书<br>
+<br>
+[list2]<br>
+cat=猫<br>
+dog=狗
+            </div>
+            <p style="font-size:12px;color:#666;">支持分隔符：= , Tab</p>
+        </div>
+
+        <!-- 现有词库 -->
+        <div class="format-section">
+            <h4>📚 当前词库</h4>
+            {% if list_info %}
+            <ul class="list-info-list">
+                {% for name, count in list_info.items() %}
+                <li><span class="list-tag">{{ name }}</span> {{ count }} 个单词</li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p style="color:#999;">暂无单词</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- 右：上传操作 -->
+    <div class="import-panel">
+        <div class="upload-zone" id="upload-zone">
+            <div class="upload-icon">📁</div>
+            <p class="upload-text">点击选择或拖拽文件到此处</p>
+            <p class="upload-hint">支持 .csv 和 .txt 文件</p>
+            <input type="file" id="file-input" accept=".csv,.txt" style="display:none">
+            <button class="btn btn-secondary" onclick="document.getElementById('file-input').click()">选择文件</button>
+        </div>
+
+        <div id="parse-result" style="display:none">
+            <div class="parse-header">
+                <span id="parse-summary"></span>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="overwrite-check">
+                    覆盖已有同名单词
+                </label>
+            </div>
+
+            <div class="preview-table-wrap">
+                <table class="preview-table">
+                    <thead>
+                        <tr><th>列表</th><th>单词</th><th>释义</th></tr>
+                    </thead>
+                    <tbody id="preview-tbody"></tbody>
+                </table>
+            </div>
+
+            <div class="import-actions">
+                <button class="btn btn-secondary" onclick="resetUpload()">重新选择</button>
+                <button class="btn btn-primary" id="confirm-btn" onclick="confirmImport()">确认导入</button>
+            </div>
+        </div>
+
+        <div id="import-success" style="display:none">
+            <div class="success-banner">
+                <div class="success-icon">✅</div>
+                <div id="success-msg"></div>
+                <div class="import-success-actions">
+                    <button class="btn btn-secondary" onclick="resetUpload()">继续导入</button>
+                    <a href="{{ url_for('wordmaster.study') }}" class="btn btn-primary">去学习</a>
+                </div>
+            </div>
+        </div>
+
+        <div id="upload-error" class="alert alert-error" style="display:none"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let parsedRowsJson = '';
+
+const fileInput = document.getElementById('file-input');
+const uploadZone = document.getElementById('upload-zone');
+
+// 拖拽上传
+uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadZone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) uploadFile(file);
+});
+
+fileInput.addEventListener('change', () => {
+    if (fileInput.files[0]) uploadFile(fileInput.files[0]);
+});
+
+async function uploadFile(file) {
+    showError('');
+    const formData = new FormData();
+    formData.append('file', file);
+
+    uploadZone.querySelector('.upload-text').textContent = '解析中...';
+
+    const res = await fetch('/import/upload', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    uploadZone.querySelector('.upload-text').textContent = '点击选择或拖拽文件到此处';
+
+    if (!data.success) {
+        showError(data.error);
+        return;
+    }
+
+    parsedRowsJson = data.rows_json;
+
+    // 显示预览
+    document.getElementById('parse-summary').textContent =
+        `共解析到 ${data.total} 个单词${data.total > 50 ? '（预览前50条）' : ''}`;
+    const tbody = document.getElementById('preview-tbody');
+    tbody.innerHTML = data.preview.map(r =>
+        `<tr><td><span class="list-tag">${r.list || '(未分组)'}</span></td><td>${r.word}</td><td>${r.meaning}</td></tr>`
+    ).join('');
+
+    uploadZone.style.display = 'none';
+    document.getElementById('parse-result').style.display = 'block';
+}
+
+async function confirmImport() {
+    const overwrite = document.getElementById('overwrite-check').checked;
+    const btn = document.getElementById('confirm-btn');
+    btn.disabled = true;
+    btn.textContent = '导入中...';
+
+    const res = await fetch('/import/confirm', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ rows_json: parsedRowsJson, overwrite: overwrite })
+    });
+    const data = await res.json();
+
+    if (data.success) {
+        document.getElementById('parse-result').style.display = 'none';
+        const successDiv = document.getElementById('import-success');
+        successDiv.style.display = 'block';
+        document.getElementById('success-msg').innerHTML =
+            `<p>${data.message}</p>` +
+            (data.list_names.length > 0 ? `<p>涉及列表：${data.list_names.map(n => `<span class="list-tag">${n}</span>`).join(' ')}</p>` : '');
+    } else {
+        showError(data.error);
+        btn.disabled = false;
+        btn.textContent = '确认导入';
+    }
+}
+
+function resetUpload() {
+    parsedRowsJson = '';
+    fileInput.value = '';
+    uploadZone.style.display = '';
+    document.getElementById('parse-result').style.display = 'none';
+    document.getElementById('import-success').style.display = 'none';
+    showError('');
+}
+
+function showError(msg) {
+    const el = document.getElementById('upload-error');
+    if (msg) { el.textContent = msg; el.style.display = 'block'; }
+    else { el.style.display = 'none'; }
+}
+</script>
+{% endblock %}

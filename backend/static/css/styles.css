@@ -222,3 +222,68 @@ table.tbl td.ops .btn { margin: 2px 2px; }
 .txn.out .t-amt { color: #ff9a9d; }
 .txn .t-time { color: var(--text-dim); }
 .txn .t-reason { color: var(--text); }
+
+/* ============================
+   三大入口卡片（首页选择器）
+   ============================ */
+.entry-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+@media (min-width: 560px) {
+  .entry-grid { grid-template-columns: 1fr 1fr 1fr; }
+}
+.entry-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 20px 18px;
+  cursor: pointer;
+  transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.entry-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
+.entry-a { border-top: 3px solid var(--primary); }
+.entry-b { border-top: 3px solid var(--accent); }
+.entry-c { border-top: 3px solid var(--ok); }
+.entry-icon { font-size: 34px; line-height: 1.1; }
+.entry-title { font-size: 18px; font-weight: 700; }
+.entry-desc { font-size: 13px; color: var(--text-dim); flex: 1; }
+.entry-go {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+/* ============================
+   管理后台二级标签
+   ============================ */
+.subtabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.subtab {
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  text-decoration: none;
+  font-size: 14px;
+  border: 1px solid var(--line);
+  transition: all 0.15s;
+}
+.subtab:hover { color: var(--text); }
+.subtab.active {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}

@@ -82,16 +82,14 @@ function studentFrame(inner, active) {
 }
 function adminFrame(inner, activeTab) {
   const tabs = [
-    ['courses', '课程管理'], ['students', '学员管理'], ['coins', '金币流水'],
-    ['api', 'API分享'],
-    ['shop', '商店'], ['wishes', '许愿池'], ['db', '数据库'], ['report', '报表'],
-    ['account', '账号'], ['settings', '设置'],
+    ['courses', '听说管理'], ['words', '单词管理'],
+    ['rewards', '奖励管理'], ['students', '学员管理'],
   ]
   const t = tabs.map(([k, l]) =>
     `<a class="tab ${activeTab === k ? 'active' : ''}" href="#/admin/${k}">${l}</a>`).join('')
   return `<div class="app">
     <div class="topbar">
-      <h1>管理后台</h1>
+      <h1>英语大师 · 管理后台</h1>
       <div class="row">
         <a class="btn ghost sm" href="#/">返回学生端</a>
         <button class="btn ghost sm" onclick="openChangePassword()">改密</button>
@@ -101,6 +99,12 @@ function adminFrame(inner, activeTab) {
     <div class="tabs">${t}</div>
     <div class="content">${inner}</div>
   </div>`
+}
+
+/* 管理后台内嵌二级工具栏（用于各板块下的子功能导航） */
+function adminSubTabs(items, active) {
+  return `<div class="subtabs">` + items.map(([href, label]) =>
+    `<a class="subtab ${active === href ? 'active' : ''}" href="${href}">${label}</a>`).join('') + `</div>`
 }
 
 /* ---------- 登录 ---------- */
@@ -200,6 +204,8 @@ function route() {
   }
   // 学生
   if (parts[0] === 'admin') return renderHome()
+  if (parts[0] === 'listen') return renderListenHome()
+  if (parts[0] === 'rewards') return renderRewards()
   if (parts[0] === 'learn' && parts[1]) return renderLearn(parts[1])
   if (parts[0] === 'settings') return renderSettings()
   if (parts[0] === 'coins') return renderCoins()

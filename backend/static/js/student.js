@@ -1,7 +1,44 @@
 /* ============ 学生端页面 ============ */
 
-/* ---------- 首页：签到 + 课程 + API Key ---------- */
+/* ---------- 首页：英语大师三大入口选择器 ---------- */
 async function renderHome() {
+  const me = await api('/me')
+  if (me.ok) setUser(me.data.user)
+  const u = getUser() || {}
+  const ci = await api('/checkin/info')
+  const info = ci.ok ? ci.data : { coin: 1, require_task: true, already: false, streak: 0, did_task_today: false }
+  const checkedToday = info.already
+  const checkinBtn = checkedToday
+    ? `<button class="big-checkin done" disabled>已签到 ✓ (+${info.coin})</button>`
+    : `<button class="big-checkin" onclick="doCheckin()">📅 每日签到 (+${info.coin})</button>`
+  const taskHint = info.require_task
+    ? `<p class="muted" style="margin-top:8px">${info.did_task_today ? '✅ 今日已完成学习任务，可签到' : '⚠️ 需先完成至少一个学习任务（任一 Step 提交）才能签到'}</p>`
+    : `<p class="muted" style="margin-top:8px">连续签到越久奖励越高</p>`
+
+  const cards = [
+    { icon: '🎧', title: '听说大师', desc: '五步法闯关 · 沉浸式听说深度学习', go: "nav('#/listen')", theme: 'a' },
+    { icon: '📚', title: '单词大师', desc: '艾宾浩斯记忆曲线 · 背单词 / 复习 / 考试', go: "window.location.href='/study'", theme: 'b' },
+    { icon: '🎁', title: '奖励中心', desc: '金币 · 商城 · 许愿池 · 用努力兑换奖励', go: "nav('#/rewards')", theme: 'c' },
+  ].map(c => `<div class="entry-card entry-${c.theme}" onclick="${c.go}">
+      <div class="entry-icon">${c.icon}</div>
+      <div class="entry-title">${c.title}</div>
+      <div class="entry-desc">${c.desc}</div>
+      <div class="entry-go">进入 →</div>
+    </div>`).join('')
+
+  el('app').innerHTML = studentFrame(`
+    <div class="card" style="margin-bottom:18px">
+      <h3>每日签到</h3>
+      ${checkinBtn}
+      ${taskHint}
+    </div>
+    <h3 style="margin:6px 0 12px">选择学习模块</h3>
+    <div class="entry-grid">${cards}</div>
+  `, 'home')
+}
+
+/* ---------- 听说大师：课程列表（原首页主体） ---------- */
+async function renderListenHome() {
   const me = await api('/me')
   if (me.ok) setUser(me.data.user)
   const r = await api('/courses')
@@ -34,26 +71,43 @@ async function renderHome() {
       </div>`
     }).join('')
   }
-  const u = getUser()
-  const ci = await api('/checkin/info')
-  const info = ci.ok ? ci.data : { coin: 1, require_task: true, already: false, streak: 0, did_task_today: false }
-  const checkedToday = info.already
-  const checkinBtn = checkedToday
-    ? `<button class="big-checkin done" disabled>已签到 ✓ (+${info.coin})</button>`
-    : `<button class="big-checkin" onclick="doCheckin()">📅 每日签到 (+${info.coin})</button>`
-  const taskHint = info.require_task
-    ? `<p class="muted" style="margin-top:8px">${info.did_task_today ? '✅ 今日已完成学习任务，可签到' : '⚠️ 需先完成至少一个学习任务（任一 Step 提交）才能签到'}</p>`
-    : `<p class="muted" style="margin-top:8px">连续签到越久奖励越高</p>`
-
   el('app').innerHTML = studentFrame(`
-    <div class="card">
-      <h3>每日签到</h3>
-      ${checkinBtn}
-      ${taskHint}
+    <div class="spread" style="margin-bottom:12px">
+      <h3>听说大师 · 我的课程</h3>
+      <button class="btn ghost sm" onclick="nav('#/')">← 返回入口</button>
     </div>
-    <h3 style="margin-top:18px">我的课程</h3>
     ${coursesHtml}
-  `, 'home')
+  `, 'listen')
+}
+
+/* ---------- 奖励中心：金币 / 商城 / 许愿池 总入口 ---------- */
+async function renderRewards() {
+  const u = getUser() || {}
+  const inner = `<div class="spread" style="margin-bottom:12px">
+      <h3>奖励中心</h3>
+      <button class="btn ghost sm" onclick="nav('#/')">← 返回入口</button>
+    </div>
+    <div class="entry-grid">
+      <div class="entry-card entry-c" onclick="nav('#/coins')">
+        <div class="entry-icon">🪙</div>
+        <div class="entry-title">我的金币</div>
+        <div class="entry-desc">当前余额 ${u.coin_balance ?? 0} · 查看流水</div>
+        <div class="entry-go">进入 →</div>
+      </div>
+      <div class="entry-card entry-b" onclick="nav('#/shop')">
+        <div class="entry-icon">🛒</div>
+        <div class="entry-title">奖励商城</div>
+        <div class="entry-desc">用金币兑换免错券等好礼</div>
+        <div class="entry-go">进入 →</div>
+      </div>
+      <div class="entry-card entry-a" onclick="nav('#/wishes')">
+        <div class="entry-icon">🌟</div>
+        <div class="entry-title">许愿池</div>
+        <div class="entry-desc">发起心愿，或助力他人圆梦</div>
+        <div class="entry-go">进入 →</div>
+      </div>
+    </div>`
+  el('app').innerHTML = studentFrame(inner, 'rewards')
 }
 
 async function doCheckin() {

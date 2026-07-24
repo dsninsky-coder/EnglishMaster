@@ -1,0 +1,624 @@
+{% extends "base.html" %}
+{% block title %}超级管理员 - 单词大师{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h2>🛡️ 超级管理员</h2>
+    <p class="page-desc">统一管理 AI 接口、用户设置管控与答题规则</p>
+</div>
+
+{% if msg %}
+<div class="alert alert-{{ msg[0] }}">{{ msg[1] }}</div>
+{% endif %}
+
+<div class="settings-layout">
+
+    <!-- ① AI API 统一设置 -->
+    <div class="settings-card">
+        <h3 class="settings-section-title">🤖 共享 AI API 设置</h3>
+        <p class="setting-desc">配置后，勾选的用户无需自己申请 API Key 即可使用 AI 智能判题。</p>
+        <form method="post">
+            <input type="hidden" name="action" value="save_api">
+
+            <div class="setting-row vertical">
+                <label for="shared_api_key">共享 API Key</label>
+                <input type="password" id="shared_api_key" name="shared_api_key"
+                       value="{{ admin_cfg.shared_api_key }}"
+                       placeholder="sk-..." class="setting-input-full">
+            </div>
+
+            <div class="setting-row vertical">
+                <label for="shared_base_url">API Base URL</label>
+                <input type="text" id="shared_base_url" name="shared_base_url"
+                       value="{{ admin_cfg.shared_base_url }}"
+                       placeholder="https://api.openai.com/v1"
+                       class="setting-input-full">
+            </div>
+
+            <div class="setting-row vertical">
+                <label for="shared_ai_model">AI 模型名称</label>
+                <input type="text" id="shared_ai_model" name="shared_ai_model"
+                       value="{{ admin_cfg.get('shared_ai_model', 'deepseek-chat') }}"
+                       placeholder="deepseek-chat"
+                       class="setting-input-full">
+                <p class="setting-desc">例如：deepseek-chat、gpt-3.5-turbo、gpt-4o 等</p>
+            </div>
+
+            <div class="setting-row vertical">
+                <label>答题冷却时间（秒）</label>
+                <p class="setting-desc">测验未通过（正确率 &lt; 80%）后，需等待多少秒才能重新答题</p>
+                <input type="number" name="retry_cooldown_seconds"
+                       value="{{ admin_cfg.retry_cooldown_seconds }}"
+                       min="0" max="86400" class="setting-input">
+            </div>
+
+            <div class="setting-row" style="gap:14px;align-items:center;">
+                <div>
+                    <label style="font-weight:600;">英译汉发音开关</label>
+                    <p class="setting-desc" style="margin:2px 0 0;">开启后，学生在英译汉模式下可以看到发音按钮辅助记忆；关闭则只能看单词文字。</p>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" name="tts_in_en2zh" {% if admin_cfg.get('tts_in_en2zh') %}checked{% endif %}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+
+            <div class="setting-row" style="gap:14px;align-items:center;">
+                <div>
+                    <label style="font-weight:600;">音译汉模式开关</label>
+                    <p class="setting-desc" style="margin:2px 0 0;">开启后，学生在答题时可以切换到"🎧 音→中"模式（听发音写中文）；关闭则隐藏该模式入口。</p>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" name="audio2zh_enabled" {% if admin_cfg.get('audio2zh_enabled', True) %}checked{% endif %}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+
+            <div class="setting-row vertical">
+                <label for="judge_mode">英中/音中 判定方式</label>
+                <p class="setting-desc">控制学生答题时（英译汉、音译汉）如何判断答案是否正确。中英模式始终为精确匹配。</p>
+                <select id="judge_mode" name="judge_mode" class="setting-input" style="max-width:320px;">
+                    <option value="local_then_ai" {% if admin_cfg.get('judge_mode', 'local_then_ai') == 'local_then_ai' %}selected{% endif %}>🔍 优先本地，错误时再AI（推荐）</option>
+                    <option value="local_only" {% if admin_cfg.get('judge_mode', 'local_then_ai') == 'local_only' %}selected{% endif %}>📝 纯本地判定（不调AI）</option>
+                    <option value="ai_only" {% if admin_cfg.get('judge_mode', 'local_then_ai') == 'ai_only' %}selected{% endif %}>🤖 纯AI判定（跳过本地）</option>
+                </select>
+            </div>
+
+            <div class="setting-row vertical">
+                <label>允许使用共享 API 的用户</label>
+                <p class="setting-desc">勾选的用户将自动使用上方共享 API Key，其个人设置的 API Key 会被覆盖。</p>
+                <div class="user-checkbox-list">
+                    {% for user in all_users %}
+                    <label class="user-checkbox-item">
+                        <input type="checkbox" name="allowed_api_users" value="{{ user }}"
+                               {% if user in admin_cfg.allowed_api_users %}checked{% endif %}>
+                        <span class="user-checkbox-name">👤 {{ user }}</span>
+                    </label>
+                    {% endfor %}
+                    {% if not all_users %}
+                    <p class="empty-hint">暂无普通用户</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="settings-actions">
+                <button type="submit" class="btn btn-primary">保存 API 设置</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- ② 用户设置管控 -->
+    <div class="settings-card">
+        <h3 class="settings-section-title">🔧 用户设置管控</h3>
+        <p class="setting-desc">强制为指定用户设定参数，被管控的字段用户自己无法修改。</p>
+
+        <div class="setting-row vertical">
+            <label for="control-user-select">选择用户</label>
+            <select id="control-user-select" class="setting-input" onchange="loadUserControl(this.value)">
+                <option value="">-- 请选择用户 --</option>
+                {% for user in all_users %}
+                <option value="{{ user }}"
+                    {% if admin_cfg.controlled_users and user in admin_cfg.controlled_users %}
+                    class="has-control"
+                    {% endif %}
+                >
+                    {{ user }}
+                    {% if admin_cfg.controlled_users and user in admin_cfg.controlled_users %}
+                    ⚙️ (已管控)
+                    {% endif %}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div id="user-control-panel" style="display:none">
+            <div class="control-user-badge">
+                正在管控：<strong id="control-username-display"></strong>
+                <button type="button" class="btn btn-warning btn-sm" style="margin-left:12px;padding:3px 10px;font-size:12px;" onclick="openResetPwdModal()">🔑 重置密码</button>
+            </div>
+
+            <form method="post" id="control-form">
+                <input type="hidden" name="action" value="save_user_control">
+                <input type="hidden" name="target_user" id="ctrl-target-user">
+
+                <!-- 复习数量 -->
+                <div class="control-field-row">
+                    <label class="control-checkbox-label">
+                        <input type="checkbox" name="control_fields" value="review_count"
+                               id="ctrl-check-review-count">
+                        <span>管控：每次复习单词数</span>
+                    </label>
+                    <input type="number" name="ctrl_review_count" id="ctrl-review-count"
+                           value="20" min="5" max="200" class="setting-input ctrl-value-input">
+                </div>
+
+                <!-- 复习模式（三档）-->
+                <div class="control-field-row" style="align-items: flex-start; flex-direction: column; gap: 8px;">
+                    <label class="control-checkbox-label">
+                        <input type="checkbox" name="control_fields" value="review_mode"
+                               id="ctrl-check-review-mode">
+                        <span>管控：新背前复习要求</span>
+                    </label>
+                    <div id="ctrl-review-mode-group" class="ctrl-value-input" style="display:flex; flex-direction:column; gap:6px; padding-left:8px;">
+                        <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer;">
+                            <input type="radio" name="ctrl_review_mode" value="none" id="ctrl-rm-none">
+                            <span>不强制复习（学就学，不管复习）</span>
+                        </label>
+                        <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer;">
+                            <input type="radio" name="ctrl_review_mode" value="all" id="ctrl-rm-all">
+                            <span>必须复习全部（所有待复习单词均完成才可新背）</span>
+                        </label>
+                        <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer;">
+                            <input type="radio" name="ctrl_review_mode" value="once" id="ctrl-rm-once">
+                            <span>完成一次即可（当天任意一次复习正确率≥80% 即解锁）</span>
+                        </label>
+                    </div>
+                </div>
+
+
+
+                <!-- 两种模式都要求 -->
+                <div class="control-field-row">
+                    <label class="control-checkbox-label">
+                        <input type="checkbox" name="control_fields" value="require_both_modes"
+                               id="ctrl-check-require-both">
+                        <span>管控：两种模式都要求正确</span>
+                    </label>
+                    <label class="toggle-switch ctrl-value-input">
+                        <input type="checkbox" name="ctrl_require_both_modes" id="ctrl-require-both">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+
+                <div class="settings-actions" style="gap:10px">
+                    <button type="submit" class="btn btn-primary">应用管控</button>
+                    <button type="button" class="btn btn-danger" onclick="removeControl()">取消所有管控</button>
+                </div>
+            </form>
+
+            <form method="post" id="remove-control-form" style="display:none">
+                <input type="hidden" name="action" value="remove_user_control">
+                <input type="hidden" name="target_user" id="remove-target-user">
+            </form>
+        </div>
+    </div>
+
+    <!-- ③ 用户统计查看 -->
+    <div class="settings-card" style="grid-column: 1 / -1">
+        <h3 class="settings-section-title">📊 查看用户学习统计</h3>
+        <p class="setting-desc">以管理员身份查看任意用户的学习记录与成绩统计。</p>
+        <div class="user-stats-list">
+            {% for user in all_users %}
+            <a href="{{ url_for('wordmaster.stats', user=user) }}" class="user-stats-btn">
+                <span class="user-stats-icon">👤</span>
+                <span class="user-stats-name">{{ user }}</span>
+                <span class="user-stats-arrow">→ 查看统计</span>
+            </a>
+            {% else %}
+            <p class="empty-hint">暂无普通用户</p>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- ④ 金币商城商品管理 -->
+    <div class="settings-card" style="grid-column: 1 / -1">
+        <h3 class="settings-section-title">🛒 金币商城管理</h3>
+        <p class="setting-desc">上架自定义商品，处理用户订单。内置免错券由系统自动发放，无需管理员操作。</p>
+
+        <!-- 新增商品 -->
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:18px;">
+            <div>
+                <label class="setting-label">商品名称</label>
+                <input type="text" id="new-prod-name" class="setting-input" placeholder="例如：补课奖励" style="width:160px;">
+            </div>
+            <div>
+                <label class="setting-label">描述</label>
+                <input type="text" id="new-prod-desc" class="setting-input" placeholder="简短描述" style="width:200px;">
+            </div>
+            <div>
+                <label class="setting-label">金币价格</label>
+                <input type="number" id="new-prod-price" class="setting-input" value="5" min="1" style="width:80px;">
+            </div>
+            <button class="btn btn-primary" onclick="addProduct()">+ 上架商品</button>
+        </div>
+
+        <!-- 商品列表 -->
+        <div id="shop-products-area">加载中...</div>
+
+        <!-- 待处理订单 -->
+        <h4 style="margin:20px 0 10px;color:var(--text-primary);">📦 待发货订单</h4>
+        <div id="shop-orders-area">加载中...</div>
+    </div>
+
+    <!-- ⑤ 考试管理入口 -->
+    <div class="settings-card" style="grid-column: 1 / -1;">
+        <h3 class="settings-section-title">📝 考试管理</h3>
+        <p class="setting-desc">为不同用户指定考试内容（范围、容量、考核方式），推送给学生参加。</p>
+        <a href="{{ url_for('wordmaster.admin_exam') }}" class="btn btn-primary">前往考试管理 →</a>
+    </div>
+
+    <!-- ⑤ 金币发放管理 -->
+    <div class="settings-card" style="grid-column: 1 / -1;">
+        <h3 class="settings-section-title">🪙 金币发放管理</h3>
+        <p class="setting-desc">管理员向指定用户发放（或扣除）金币，需验证管理员密码。发放记录会在用户金币流水中显示留言。</p>
+        <div id="grant-coin-error" style="display:none;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:#856404;"></div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">
+            <div>
+                <label class="setting-label">目标用户</label>
+                <select id="grant-user" class="setting-input" style="min-width:120px;">
+                    <option value="">-- 请选择 --</option>
+                    {% for u in all_users_all %}
+                    <option value="{{ u }}">{{ u }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="setting-label">金币数量 <span style="color:#888;font-weight:400;">（正=发放，负=扣除）</span></label>
+                <input type="number" id="grant-amount" class="setting-input" value="1" style="width:100px;">
+            </div>
+            <div>
+                <label class="setting-label">附加留言</label>
+                <input type="text" id="grant-message" class="setting-input" placeholder="可选，会显示在用户流水中" style="width:180px;">
+            </div>
+            <div>
+                <label class="setting-label">管理员密码</label>
+                <input type="password" id="grant-pwd" class="setting-input" placeholder="验证密码" style="width:120px;">
+            </div>
+            <button class="btn btn-primary" style="margin-bottom:4px;" onclick="grantCoins()">发放金币</button>
+        </div>
+    </div>
+
+    <!-- ⑥ 当前管控概览 -->
+
+        <h3 class="settings-section-title">📋 当前管控概览</h3>
+        {% if admin_cfg.controlled_users %}
+        <div class="table-wrap">
+            <table class="records-table">
+                <thead>
+                    <tr>
+                        <th>用户</th>
+                        <th>被管控字段</th>
+                        <th>是否允许共享API</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for user, fields in admin_cfg.controlled_users.items() %}
+                    <tr>
+                        <td><strong>{{ user }}</strong></td>
+                        <td>
+                            {% for k, v in fields.items() %}
+                            <span class="badge badge-warning">{{ k }}={{ v }}</span>
+                            {% endfor %}
+                        </td>
+                        <td>
+                            {% if user in admin_cfg.allowed_api_users %}
+                            <span class="badge badge-success">✓ 已授权</span>
+                            {% else %}
+                            <span class="badge badge-primary">─ 未授权</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="empty-hint">目前没有对任何用户进行设置管控。</p>
+        {% endif %}
+    </div>
+
+</div>
+
+<!-- 重置用户密码 弹窗 -->
+<div id="reset-pwd-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2000;display:none;align-items:center;justify-content:center;">
+    <div style="background:var(--card-bg,#fff);border-radius:12px;padding:28px 32px;width:360px;max-width:92vw;box-shadow:0 8px 32px rgba(0,0,0,.18);position:relative;">
+        <h3 style="margin:0 0 6px;font-size:17px;">🔑 重置用户密码</h3>
+        <p style="margin:0 0 18px;font-size:13px;color:var(--text-secondary,#666);">正在为 <strong id="reset-pwd-username-label" style="color:var(--primary,#4361ee)"></strong> 重置密码，无需旧密码，直接设置新密码。</p>
+
+        <div id="reset-pwd-error" style="display:none;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:#856404;"></div>
+
+        <form method="post" id="reset-pwd-form" onsubmit="submitResetPwd(event)">
+            <input type="hidden" name="action" value="reset_user_password">
+            <input type="hidden" name="target_user" id="reset-pwd-target">
+
+            <div style="margin-bottom:12px;">
+                <label style="display:block;font-size:13px;font-weight:600;margin-bottom:5px;">新密码 <span style="color:#888;font-weight:400">（至少4个字符）</span></label>
+                <input type="password" name="new_password" id="reset-new-pwd"
+                       class="setting-input" style="width:100%;box-sizing:border-box;"
+                       placeholder="输入新密码" autocomplete="new-password" minlength="4" required>
+            </div>
+            <div style="margin-bottom:18px;">
+                <label style="display:block;font-size:13px;font-weight:600;margin-bottom:5px;">确认新密码</label>
+                <input type="password" name="confirm_password" id="reset-confirm-pwd"
+                       class="setting-input" style="width:100%;box-sizing:border-box;"
+                       placeholder="再次输入新密码" autocomplete="new-password" minlength="4" required>
+            </div>
+
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+                <button type="button" class="btn btn-secondary" onclick="closeResetPwdModal()">取消</button>
+                <button type="submit" id="reset-pwd-submit-btn" class="btn btn-warning">确认重置</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ============ 用户管控逻辑 ============
+function loadUserControl(username) {
+    const panel = document.getElementById('user-control-panel');
+    if (!username) { panel.style.display = 'none'; return; }
+    document.getElementById('ctrl-target-user').value = username;
+    document.getElementById('remove-target-user').value = username;
+    document.getElementById('control-username-display').textContent = username;
+    fetch(`/admin/user_control_data?user=${encodeURIComponent(username)}`)
+        .then(r => r.json())
+        .then(data => {
+            const controlled = data.controlled || {};
+            const cfg = data.effective_config || {};
+            if ('review_count' in controlled) {
+                document.getElementById('ctrl-check-review-count').checked = true;
+                document.getElementById('ctrl-review-count').value = controlled.review_count;
+            } else {
+                document.getElementById('ctrl-check-review-count').checked = false;
+                document.getElementById('ctrl-review-count').value = cfg.review_count || 20;
+            }
+            let currentMode = 'none';
+            if ('review_mode' in controlled) {
+                currentMode = controlled.review_mode;
+                document.getElementById('ctrl-check-review-mode').checked = true;
+            } else if ('require_review_before_study' in controlled) {
+                currentMode = controlled.require_review_before_study ? 'all' : 'none';
+                document.getElementById('ctrl-check-review-mode').checked = true;
+            } else {
+                if (cfg.review_mode) currentMode = cfg.review_mode;
+                else if (cfg.require_review_before_study) currentMode = 'all';
+                document.getElementById('ctrl-check-review-mode').checked = false;
+            }
+            const rmRadio = document.querySelector(`input[name="ctrl_review_mode"][value="${currentMode}"]`);
+            if (rmRadio) rmRadio.checked = true;
+            else document.getElementById('ctrl-rm-none').checked = true;
+            if ('require_both_modes' in controlled) {
+                document.getElementById('ctrl-check-require-both').checked = true;
+                document.getElementById('ctrl-require-both').checked = controlled.require_both_modes;
+            } else {
+                document.getElementById('ctrl-check-require-both').checked = false;
+                document.getElementById('ctrl-require-both').checked = cfg.require_both_modes || false;
+            }
+            panel.style.display = 'block';
+        });
+}
+
+function removeControl() {
+    if (!confirm('确认取消对该用户的所有设置管控？')) return;
+    document.getElementById('remove-control-form').submit();
+}
+
+// ============ 重置用户密码弹窗 ============
+function openResetPwdModal() {
+    const username = document.getElementById('ctrl-target-user').value;
+    if (!username) return;
+    document.getElementById('reset-pwd-target').value = username;
+    document.getElementById('reset-pwd-username-label').textContent = username;
+    document.getElementById('reset-new-pwd').value = '';
+    document.getElementById('reset-confirm-pwd').value = '';
+    document.getElementById('reset-pwd-error').style.display = 'none';
+    document.getElementById('reset-pwd-submit-btn').disabled = false;
+    document.getElementById('reset-pwd-submit-btn').textContent = '确认重置';
+    const modal = document.getElementById('reset-pwd-modal');
+    modal.style.display = 'flex';
+}
+
+function closeResetPwdModal() {
+    document.getElementById('reset-pwd-modal').style.display = 'none';
+}
+
+// 点击遮罩关闭
+document.addEventListener('DOMContentLoaded', function() {
+    document.getElementById('reset-pwd-modal').addEventListener('click', function(e) {
+        if (e.target === this) closeResetPwdModal();
+    });
+});
+
+function submitResetPwd(e) {
+    e.preventDefault();
+    const newPwd = document.getElementById('reset-new-pwd').value;
+    const confirmPwd = document.getElementById('reset-confirm-pwd').value;
+    const errBox = document.getElementById('reset-pwd-error');
+
+    if (newPwd.length < 4) {
+        errBox.textContent = '新密码至少4个字符';
+        errBox.style.display = 'block';
+        return;
+    }
+    if (newPwd !== confirmPwd) {
+        errBox.textContent = '两次输入的新密码不一致';
+        errBox.style.display = 'block';
+        return;
+    }
+
+    const btn = document.getElementById('reset-pwd-submit-btn');
+    btn.disabled = true;
+    btn.textContent = '处理中...';
+
+    const formData = new FormData(document.getElementById('reset-pwd-form'));
+    fetch('/admin', { method: 'POST', body: formData })
+        .then(r => r.text())
+        .then(html => {
+            // 后端 POST 成功会重定向或返回页面；直接检查响应即可
+            closeResetPwdModal();
+            // 显示成功提示
+            showAdminToast('✅ 密码已成功重置', 'success');
+        })
+        .catch(() => {
+            errBox.textContent = '请求失败，请重试';
+            errBox.style.display = 'block';
+            btn.disabled = false;
+            btn.textContent = '确认重置';
+        });
+}
+
+function showAdminToast(msg, type) {
+    let t = document.getElementById('admin-toast');
+    if (!t) {
+        t = document.createElement('div');
+        t.id = 'admin-toast';
+        t.style.cssText = 'position:fixed;bottom:28px;left:50%;transform:translateX(-50%);padding:10px 22px;border-radius:8px;font-size:14px;font-weight:600;z-index:9999;pointer-events:none;transition:opacity .3s;';
+        document.body.appendChild(t);
+    }
+    t.textContent = msg;
+    t.style.background = type === 'success' ? '#d4edda' : '#f8d7da';
+    t.style.color = type === 'success' ? '#155724' : '#721c24';
+    t.style.opacity = '1';
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => { t.style.opacity = '0'; }, 3000);
+}
+
+
+async function loadShopAdmin() {
+    const r = await fetch('/admin/shop_products');
+    const data = await r.json();
+    renderProducts(data.products || []);
+    renderOrders(data.orders || []);
+}
+
+function renderProducts(products) {
+    const el = document.getElementById('shop-products-area');
+    if (!products.length) { el.innerHTML = '<p class="empty-hint">暂无商品</p>'; return; }
+    let html = '<div style="display:flex;flex-wrap:wrap;gap:12px;">';
+    for (const p of products) {
+        const isBuiltin = p.type === 'builtin';
+        const isActive = p.active !== false;
+        const cardStyle = isActive ? '' : 'opacity:0.5;filter:grayscale(0.6);';
+        html += `<div style="border:1.5px solid var(--border-color);border-radius:10px;padding:14px;min-width:200px;max-width:240px;${cardStyle}">
+            <div style="font-weight:700;">${p.name}${isBuiltin?' <span style="font-size:.75em;color:var(--text-muted);">[内置]</span>':''}</div>
+            <div style="font-size:.82em;color:var(--text-muted);margin:4px 0 8px;">${p.desc}</div>
+            <div style="color:#f5a623;font-weight:600;margin-bottom:8px;">🪙 ${p.price} 金币</div>
+            <div style="font-size:.78em;margin-bottom:8px;">
+                ${isActive ? '<span style="color:var(--success);">✓ 上架中</span>' : '<span style="color:var(--danger);">✗ 已下架</span>'}
+            </div>
+            <div style="display:flex;gap:6px;">
+                <button class="btn btn-sm ${isActive?'':'btn-primary'}"
+                    onclick="toggleProduct('${p.id}',${!isActive})">${isActive?'下架':'上架'}</button>
+            </div>
+        </div>`;
+    }
+    html += '</div>';
+    el.innerHTML = html;
+}
+
+function renderOrders(orders) {
+    const el = document.getElementById('shop-orders-area');
+    const pending = orders.filter(o => o.status === 'pending');
+    if (!pending.length) { el.innerHTML = '<p class="empty-hint">暂无待发货订单 🎉</p>'; return; }
+    let html = '<table class="records-table"><thead><tr><th>用户</th><th>商品</th><th>金币</th><th>下单时间</th><th>操作</th></tr></thead><tbody>';
+    for (const o of pending) {
+        html += `<tr>
+            <td>${o.user}</td>
+            <td>${o.product_name}</td>
+            <td>${o.price}</td>
+            <td style="font-size:.85em;color:var(--text-muted);">${o.created_at.slice(0,10)}</td>
+            <td><button class="btn btn-sm btn-primary" onclick="shipOrder('${o.id}')">标记发货</button></td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+    el.innerHTML = html;
+}
+
+async function addProduct() {
+    const name = document.getElementById('new-prod-name').value.trim();
+    const desc = document.getElementById('new-prod-desc').value.trim();
+    const price = parseInt(document.getElementById('new-prod-price').value)||1;
+    if (!name) { alert('商品名称不能为空'); return; }
+    await fetch('/admin/shop_add_product',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({name,desc,price})});
+    document.getElementById('new-prod-name').value='';
+    document.getElementById('new-prod-desc').value='';
+    await loadShopAdmin();
+}
+
+async function toggleProduct(pid, active) {
+    await fetch('/admin/shop_toggle_product',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({product_id:pid,active})});
+    await loadShopAdmin();
+}
+
+async function deleteProduct(pid, name) {
+    if (!confirm(`确认删除商品「${name}」？`)) return;
+    await fetch('/admin/shop_delete_product',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({product_id:pid})});
+    await loadShopAdmin();
+}
+
+async function shipOrder(oid) {
+    await fetch('/admin/shop_ship',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({order_id:oid})});
+    await loadShopAdmin();
+}
+
+
+async function grantCoins() {
+    const targetUser = document.getElementById("grant-user").value;
+    const amount = parseInt(document.getElementById("grant-amount").value) || 0;
+    const message = document.getElementById("grant-message").value.trim();
+    const pwd = document.getElementById("grant-pwd").value;
+    const errBox = document.getElementById("grant-coin-error");
+    errBox.style.display = "none";
+    if (!targetUser) { showGrantError("请选择目标用户"); return; }
+    if (amount === 0) { showGrantError("金币数量不能为 0"); return; }
+    if (!pwd) { showGrantError("请输入管理员密码"); return; }
+    try {
+        const r = await fetch("/admin/grant_coins", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({target_user: targetUser, amount: amount, message: message, admin_password: pwd})
+        });
+        const data = await r.json();
+        if (data.success) {
+            showAdminToast(data.message, "success");
+            document.getElementById("grant-amount").value = 1;
+            document.getElementById("grant-message").value = "";
+            document.getElementById("grant-pwd").value = "";
+        } else {
+            showGrantError(data.message);
+        }
+    } catch(e) {
+        showGrantError("请求失败，请重试");
+    }
+}
+
+function showGrantError(msg) {
+    const errBox = document.getElementById("grant-coin-error");
+    errBox.textContent = msg;
+    errBox.style.display = "block";
+}
+
+// 页面加载时获取商城数据
+document.addEventListener('DOMContentLoaded', loadShopAdmin);
+</script>
+{% endblock %}

@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}复习 - 单词大师{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h2>🔄 复习单词</h2>
+    <p class="page-desc">根据遗忘曲线，系统自动安排需要复习的单词</p>
+</div>
+
+<div class="review-start-card">
+    {% if review_count > 0 %}
+    <div class="review-count-badge">
+        <span class="count-num">{{ review_count }}</span>
+        <span class="count-label">个单词待复习</span>
+    </div>
+    {% if review_cooldown > 0 %}
+    <div class="alert alert-warning" id="review-cooldown-alert">
+        ⏱ 复习未通过，需等待 <strong id="review-cd-text">{{ review_cooldown }}</strong> 秒后才能再次复习
+    </div>
+    {% else %}
+    <div class="review-settings">
+        {% if review_count_controlled %}
+        <p class="review-tip" style="color:var(--warning); margin-bottom:0;">
+            🔒 每次复习数量由管理员设定为 <strong>{{ default_limit }}</strong> 个，
+            如需修改请联系管理员。
+        </p>
+        {% else %}
+        <label for="limit-input">本次复习数量：</label>
+        <input type="number" id="limit-input" class="limit-input"
+               value="{{ default_limit }}" min="5" max="200" step="5">
+        <span class="limit-hint">（最多 {{ review_count }} 个，可在<a href="{{ url_for('wordmaster.settings') }}">设置</a>中修改默认值）</span>
+        {% endif %}
+    </div>
+    <button class="btn btn-primary btn-lg" onclick="startReview()">开始复习</button>
+    {% endif %}
+    <p class="review-tip">💡 系统会从待复习单词中随机抽取设定数量进行复习</p>
+    {% else %}
+    <div class="empty-state">
+        <div class="empty-icon">🎊</div>
+        <h3>太棒了！暂时没有需要复习的单词</h3>
+        <p>继续学习新单词，复习任务会根据遗忘曲线自动生成</p>
+        <a href="{{ url_for('wordmaster.study') }}" class="btn btn-primary">去学新单词</a>
+    </div>
+    {% endif %}
+    <div id="status-msg"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// 冷却倒计时
+(function initReviewCooldown() {
+    const cdText = document.getElementById('review-cd-text');
+    const cdAlert = document.getElementById('review-cooldown-alert');
+    if (!cdText || !cdAlert) return;
+    let secs = {{ review_cooldown }};
+    const timer = setInterval(() => {
+        secs--;
+        if (secs <= 0) {
+            clearInterval(timer);
+            location.reload(); // 刷新页面恢复开始按钮
+            return;
+        }
+        cdText.textContent = secs;
+    }, 1000);
+})();
+
+async function startReview() {
+    {% if review_count_controlled %}
+    const limit = {{ default_limit }};
+    {% else %}
+    const limit = parseInt(document.getElementById('limit-input')?.value || 20);
+    {% endif %}
+    const btn = document.querySelector('.btn-primary');
+    btn.disabled = true;
+    btn.textContent = '加载中...';
+
+    const res = await fetch('/review/start', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({limit: limit})
+    });
+    const data = await res.json();
+
+    if (data.success) {
+        window.location.href = '/learn?type=review';
+    } else {
+        document.getElementById('status-msg').innerHTML =
+            `<div class="alert alert-info">${data.message}</div>`;
+        btn.disabled = false;
+        btn.textContent = '开始复习';
+    }
+}
+</script>
+{% endblock %}

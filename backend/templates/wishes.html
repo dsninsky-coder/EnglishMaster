@@ -1,0 +1,361 @@
+{% extends "base.html" %}
+{% block title %}许愿池{% endblock %}
+{% block content %}
+<div class="container" style="max-width:900px;margin:0 auto;padding:20px 16px;">
+
+  <!-- 顶部余额栏 -->
+  <div class="shop-topbar">
+    <div>
+      <span class="shop-balance">🪙 <span id="balance-display">{{ balance }}</span> 金币</span>
+    </div>
+    <div style="display:flex;gap:10px;">
+      {% if is_admin %}
+      <button class="btn btn-sm btn-primary" onclick="openAdminPanel()">🔧 管理许愿池</button>
+      {% endif %}
+      <button class="btn btn-sm btn-primary" onclick="openWishModal()">✨ 许一个愿</button>
+      <a href="{{ url_for('wordmaster.coins') }}" class="btn btn-sm">← 金币中心</a>
+    </div>
+  </div>
+
+  <!-- 公开许愿列表 -->
+  <div class="section-card">
+    <h2 class="section-title">✨ 许愿池</h2>
+    <p style="color:var(--text-muted);font-size:.88em;margin-top:-8px;margin-bottom:16px;">
+      所有人的美好愿望都在这里，也可以帮别人助力~
+    </p>
+    {% if wishes %}
+    <div class="wishes-list" id="wish-list-container">
+      {% for w in wishes %}
+      <div class="wish-card {% if w.lit %}lit{% endif %} {% if w.user == session.get('user','') %}mine{% endif %}"
+           id="wish-{{ w.id }}">
+        <div class="wish-header">
+          <div style="display:flex;align-items:center;gap:10px;">
+            {% if w.lit %}<span class="lit-star">⭐</span>{% endif %}
+            <span class="wish-title">{{ w.title }}</span>
+            {% if not w.is_public %}
+              <span class="badge badge-warn" style="font-size:.75em;">悄悄愿望</span>
+            {% endif %}
+            <span class="badge
+              {% if w.status == 'open' %}badge-info
+              {% elif w.status == 'approved' %}badge-success
+              {% elif w.status == 'fulfilled' %}badge-success
+              {% else %}badge-warn{% endif %}">
+              {% if w.status == 'open' %}🕯️ 许愿中
+              {% elif w.status == 'approved' %}✅ 已点亮
+              {% elif w.status == 'fulfilled' %}🎉 已实现
+              {% else %}{{ w.status }}{% endif %}
+            </span>
+          </div>
+          <div class="wish-meta">
+            <span>👤 {{ w.user }}</span>
+            <span style="margin-left:8px;">📅 {{ w.created_at[:10] }}</span>
+          </div>
+        </div>
+        {% if w.desc %}
+        <div class="wish-desc">{{ w.desc }}</div>
+        {% endif %}
+        <div class="wish-footer">
+          <div class="wish-coins-area">
+            <span class="wish-coins">🪙 已汇集 {{ w.pledged_coins }} 金币</span>
+            {% if w.pledges|length > 1 %}
+            <span style="color:var(--text-muted);font-size:.82em;">（{{ w.pledges|length }} 人助力）</span>
+            {% endif %}
+          </div>
+          <div class="wish-actions">
+            {% if w.status in ('open', 'approved') %}
+              {% if w.user == session.get('user','') %}
+              {# 发布者本人：只能追加金币，归档由管理员操作 #}
+              <button class="btn btn-sm btn-primary"
+                      onclick="openPledgeModal('{{ w.id }}','{{ w.title }}')">➕ 追加金币</button>
+              {% else %}
+              <button class="btn btn-sm btn-primary"
+                      onclick="openPledgeModal('{{ w.id }}','{{ w.title }}')">💛 助力</button>
+              {% endif %}
+            {% endif %}
+          </div>
+        </div>
+        <!-- 助力记录展开 -->
+        {% if w.pledges|length > 0 %}
+        <div class="pledge-list">
+          {% for pg in w.pledges %}
+          <span class="pledge-chip">{{ pg.user }} +{{ pg.coins }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state"><p>还没有任何愿望，快来许一个吧！</p></div>
+    {% endif %}
+  </div>
+
+  <!-- 归档/驳回 -->
+  {% if archived %}
+  <div class="section-card">
+    <h2 class="section-title" style="color:var(--text-muted);">📁 已归档 / 被驳回</h2>
+    <div class="wishes-list archived">
+      {% for w in archived %}
+      <div class="wish-card archived-card">
+        <div class="wish-header">
+          <span class="wish-title" style="opacity:.7;">{{ w.title }}</span>
+          <span class="badge {% if w.status=='archived' %}badge-success{% else %}badge-danger{% endif %}">
+            {% if w.status=='archived' %}已实现归档{% else %}已驳回{% endif %}
+          </span>
+        </div>
+        {% if w.status == 'rejected' and w.reject_reason %}
+        <div class="wish-desc" style="color:#e74c3c;">驳回原因：{{ w.reject_reason }}</div>
+        {% endif %}
+        <div style="font-size:.82em;color:var(--text-muted);">
+          {{ w.user }} · 共 {{ w.pledged_coins }} 金币 · {{ w.created_at[:10] }}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<!-- 许愿弹窗 -->
+<div id="wish-modal" class="wish-modal-overlay" style="display:none;">
+  <div class="wish-modal-box">
+    <h3>✨ 许一个愿望</h3>
+    <div style="margin:16px 0;">
+      <label class="form-label">愿望标题 *</label>
+      <input type="text" id="wish-title" class="form-input" placeholder="简短描述你的愿望" maxlength="40">
+      <label class="form-label" style="margin-top:12px;">详细描述（可选）</label>
+      <textarea id="wish-desc" class="form-input" rows="3" placeholder="描述细节..."></textarea>
+      <label class="form-label" style="margin-top:12px;">投入金币（≥1）</label>
+      <input type="number" id="wish-coins" class="form-input" value="1" min="1">
+      <div style="margin-top:12px;display:flex;align-items:center;gap:10px;">
+        <label style="font-size:.9em;cursor:pointer;">
+          <input type="checkbox" id="wish-public" checked> 公开愿望（所有人可见）
+        </label>
+      </div>
+      <div style="font-size:.82em;color:var(--text-muted);margin-top:6px;">
+        取消勾选则为"悄悄愿望"，仅自己和管理员可见
+      </div>
+    </div>
+    <div style="display:flex;gap:12px;justify-content:flex-end;">
+      <button class="btn" onclick="closeWishModal()">取消</button>
+      <button class="btn btn-primary" onclick="submitWish()">✨ 发出愿望</button>
+    </div>
+  </div>
+</div>
+
+<!-- 助力弹窗 -->
+<div id="pledge-modal" class="wish-modal-overlay" style="display:none;">
+  <div class="wish-modal-box" style="max-width:360px;">
+    <h3>💛 助力愿望</h3>
+    <p id="pledge-title-text" style="color:var(--text-muted);margin:10px 0;"></p>
+    <label class="form-label">投入金币（≥1）</label>
+    <input type="number" id="pledge-coins" class="form-input" value="1" min="1">
+    <div style="display:flex;gap:12px;justify-content:flex-end;margin-top:16px;">
+      <button class="btn" onclick="closePledgeModal()">取消</button>
+      <button class="btn btn-primary" onclick="doPledge()">确认助力</button>
+    </div>
+  </div>
+</div>
+
+<!-- 管理员面板弹窗 -->
+{% if is_admin %}
+<div id="admin-panel" class="wish-modal-overlay" style="display:none;">
+  <div class="wish-modal-box" style="max-width:720px;max-height:80vh;overflow-y:auto;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+      <h3 style="margin:0;">🔧 许愿池管理</h3>
+      <button class="btn btn-sm" onclick="closeAdminPanel()">关闭</button>
+    </div>
+    <div id="admin-wishes-content">加载中...</div>
+  </div>
+</div>
+{% endif %}
+
+<div id="toast" class="toast" style="display:none;"></div>
+
+<style>
+.shop-topbar { display:flex;align-items:center;justify-content:space-between;
+  background:var(--card-bg);border-radius:12px;padding:14px 20px;
+  margin-bottom:18px;box-shadow:0 2px 8px rgba(0,0,0,.06); }
+.shop-balance { font-size:1.15em;font-weight:700;color:#f5a623; }
+
+.section-card { background:var(--card-bg);border-radius:14px;padding:20px;
+  margin-bottom:18px;box-shadow:0 2px 8px rgba(0,0,0,.06); }
+.section-title { font-size:1.1em;font-weight:700;margin:0 0 10px;color:var(--text-primary); }
+
+.wishes-list { display:flex;flex-direction:column;gap:14px; }
+.wish-card { border:2px solid var(--border-color);border-radius:12px;padding:16px;
+  transition:.2s; }
+.wish-card.lit { border-color:#f5a623;background:rgba(245,166,35,.05); }
+.wish-card.mine { border-style:dashed; }
+.wish-card.archived-card { opacity:.7; }
+.lit-star { font-size:1.2em; }
+.wish-header { display:flex;align-items:flex-start;justify-content:space-between;
+  gap:12px;flex-wrap:wrap;margin-bottom:6px; }
+.wish-title { font-weight:700;font-size:1em;color:var(--text-primary); }
+.wish-meta { font-size:.82em;color:var(--text-muted);white-space:nowrap; }
+.wish-desc { color:var(--text-muted);font-size:.88em;margin:6px 0 10px; }
+.wish-footer { display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px; }
+.wish-coins { font-weight:700;color:#f5a623; }
+.pledge-list { display:flex;flex-wrap:wrap;gap:6px;margin-top:10px; }
+.pledge-chip { background:var(--primary-light,#e8f0fe);color:var(--primary);
+  padding:2px 10px;border-radius:999px;font-size:.78em; }
+
+.badge { display:inline-block;padding:2px 10px;border-radius:999px;font-size:.8em;font-weight:600; }
+.badge-info { background:#d1ecf1;color:#0c5460; }
+.badge-warn { background:#fff3cd;color:#856404; }
+.badge-success { background:#d4edda;color:#155724; }
+.badge-danger { background:#f8d7da;color:#721c24; }
+
+.form-label { display:block;font-size:.88em;font-weight:600;
+  color:var(--text-muted);margin-bottom:4px; }
+.form-input { width:100%;padding:8px 12px;border:1.5px solid var(--border-color);
+  border-radius:8px;background:var(--input-bg,#fff);color:var(--text-primary);
+  font-size:.95em;box-sizing:border-box; }
+.form-input:focus { outline:none;border-color:var(--primary); }
+
+.wish-modal-overlay { position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:2000;
+  display:flex;align-items:center;justify-content:center; }
+.wish-modal-box { background:var(--card-bg,#fff);border-radius:16px;padding:28px 24px;
+  width:90%;max-width:420px;box-shadow:0 8px 32px rgba(0,0,0,.22); }
+
+.toast { position:fixed;bottom:30px;left:50%;transform:translateX(-50%);
+  background:rgba(0,0,0,.8);color:#fff;padding:10px 24px;border-radius:999px;
+  font-size:.95em;z-index:9999; }
+
+/* 管理员表格 */
+.admin-wish-table { width:100%;border-collapse:collapse;font-size:.88em; }
+.admin-wish-table th { text-align:left;padding:8px 10px;
+  border-bottom:2px solid var(--border-color);color:var(--text-muted); }
+.admin-wish-table td { padding:8px 10px;border-bottom:1px solid var(--border-color);
+  vertical-align:top; }
+</style>
+
+<script>
+/* ---- toast ---- */
+function showToast(msg, ms=2800) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(t._tid);
+  t._tid = setTimeout(() => t.style.display = 'none', ms);
+}
+
+/* ---- 许愿弹窗 ---- */
+function openWishModal() { document.getElementById('wish-modal').style.display='flex'; }
+function closeWishModal() { document.getElementById('wish-modal').style.display='none'; }
+
+async function submitWish() {
+  const title = document.getElementById('wish-title').value.trim();
+  const desc = document.getElementById('wish-desc').value.trim();
+  const coins = parseInt(document.getElementById('wish-coins').value)||1;
+  const is_public = document.getElementById('wish-public').checked;
+  if (!title) { showToast('请填写愿望标题'); return; }
+  const r = await fetch('/wishes/create',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({title,desc,coins,is_public})});
+  const data = await r.json();
+  showToast(data.message);
+  if (data.success) { closeWishModal(); setTimeout(()=>location.reload(),1500); }
+}
+
+/* ---- 助力弹窗 ---- */
+let pledgeWid = null;
+function openPledgeModal(wid, title) {
+  pledgeWid = wid;
+  document.getElementById('pledge-title-text').textContent = `愿望：${title}`;
+  document.getElementById('pledge-modal').style.display='flex';
+}
+function closePledgeModal() { document.getElementById('pledge-modal').style.display='none'; pledgeWid=null; }
+
+async function doPledge() {
+  if (!pledgeWid) return;
+  const coins = parseInt(document.getElementById('pledge-coins').value)||1;
+  const r = await fetch('/wishes/pledge',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({wish_id:pledgeWid,coins})});
+  const data = await r.json();
+  showToast(data.message);
+  if (data.success) {
+    document.getElementById('balance-display').textContent = data.new_balance;
+    closePledgeModal(); setTimeout(()=>location.reload(),1500);
+  }
+}
+
+/* ---- 管理员面板 ---- */
+{% if is_admin %}
+async function openAdminPanel() {
+  document.getElementById('admin-panel').style.display='flex';
+  await loadAdminWishes();
+}
+function closeAdminPanel() { document.getElementById('admin-panel').style.display='none'; }
+
+async function loadAdminWishes() {
+  const r = await fetch('/admin/wishes_data');
+  const data = await r.json();
+  const wishes = data.wishes || [];
+  const container = document.getElementById('admin-wishes-content');
+  if (!wishes.length) { container.innerHTML = '<p style="color:var(--text-muted);">暂无愿望</p>'; return; }
+  let html = `<table class="admin-wish-table">
+    <thead><tr><th>愿望</th><th>用户</th><th>金币</th><th>状态</th><th>操作</th></tr></thead>
+    <tbody>`;
+  for (const w of wishes) {
+    const statusMap = {open:'许愿中',approved:'已点亮',fulfilled:'已实现',rejected:'已驳回',archived:'已归档'};
+    // 用 data-id 和 data-title 属性，避免 title 含单引号导致 JS 语法错误
+    const actions = [];
+    if (w.status === 'open') {
+      actions.push(`<button class="btn btn-sm btn-primary admin-act" data-action="approve" data-id="${w.id}">点亮</button>`);
+      actions.push(`<button class="btn btn-sm admin-act" style="background:#e74c3c;color:#fff;" data-action="reject" data-id="${w.id}" data-title="${w.title.replace(/"/g,'&quot;')}">驳回</button>`);
+    }
+    if (w.status === 'approved') {
+      actions.push(`<button class="btn btn-sm btn-success admin-act" data-action="fulfill" data-id="${w.id}">完成后点此归档</button>`);
+      actions.push(`<button class="btn btn-sm admin-act" style="background:#e74c3c;color:#fff;" data-action="reject" data-id="${w.id}" data-title="${w.title.replace(/"/g,'&quot;')}">驳回</button>`);
+    }
+    const privacy = w.is_public ? '' : '<span class="badge badge-warn" style="font-size:.75em;">私密</span>';
+    html += `<tr>
+      <td><strong>${w.title}</strong>${privacy}<br>
+        <span style="color:var(--text-muted);font-size:.82em;">${w.desc||''}</span></td>
+      <td>${w.user}</td>
+      <td>🪙${w.pledged_coins}</td>
+      <td><span class="badge badge-info">${statusMap[w.status]||w.status}</span></td>
+      <td style="white-space:nowrap;">${actions.join(' ')}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  container.innerHTML = html;
+  // 绑定事件——避免 onclick 字符串注入
+  container.querySelectorAll('.admin-act').forEach(btn => {
+    btn.addEventListener('click', function() {
+      const action = this.dataset.action;
+      const wid = this.dataset.id;
+      const title = this.dataset.title || '';
+      if (action === 'approve') adminApprove(wid);
+      else if (action === 'reject') adminReject(wid, title);
+      else if (action === 'fulfill') adminFulfill(wid);
+    });
+  });
+}
+
+async function adminApprove(wid) {
+  const r = await fetch('/admin/wish_approve',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({wish_id:wid})});
+  const d = await r.json(); showToast(d.message);
+  if(d.success) { await loadAdminWishes(); }
+}
+async function adminFulfill(wid) {
+  if (!confirm('确认标记此愿望已实现吗？')) return;
+  const r = await fetch('/admin/wish_fulfill',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({wish_id:wid})});
+  const d = await r.json(); showToast(d.message);
+  if(d.success) { await loadAdminWishes(); }
+}
+async function adminReject(wid, title) {
+  const reason = prompt(`驳回愿望「${title}」，请输入驳回原因（可留空）：`);
+  if (reason === null) return; // 点取消
+  const r = await fetch('/admin/wish_reject',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({wish_id:wid,reason})});
+  const d = await r.json(); showToast(d.message);
+  if(d.success) { await loadAdminWishes(); }
+}
+{% endif %}
+</script>
+{% endblock %}

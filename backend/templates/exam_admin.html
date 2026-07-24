@@ -1,0 +1,395 @@
+{% extends "base.html" %}
+{% block title %}考试管理 - 单词大师{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h2>📝 考试管理</h2>
+    <p class="page-desc">为不同用户指定考试内容，推送试卷</p>
+</div>
+
+<div id="exam-admin-error" style="display:none;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:#856404;"></div>
+
+<!-- 选择用户 -->
+<div class="settings-card" style="margin-bottom:20px;">
+    <div class="setting-row vertical">
+        <label for="exam-user-select" style="font-weight:600;">选择用户</label>
+        <select id="exam-user-select" class="setting-input" onchange="loadUserExams(this.value)" style="max-width:300px;">
+            <option value="">-- 请选择用户 --</option>
+            {% for user in all_users %}
+            <option value="{{ user }}">{{ user }}</option>
+            {% endfor %}
+        </select>
+    </div>
+</div>
+
+<!-- List 索引参考 -->
+<div class="settings-card" style="margin-bottom:20px;">
+    <h3 class="settings-section-title">📚 List 索引参考</h3>
+    <p class="setting-desc">考试范围填写 List 编号（1-based），对应关系如下：</p>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">
+        {% for idx, name in list_index_map %}
+        <span style="background:var(--gray-100);border:1px solid var(--border-color);border-radius:6px;padding:3px 8px;font-size:12px;">
+            <strong>{{ idx }}</strong> = {{ name }}
+        </span>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- 5个考试槽位 -->
+<div id="exam-slots-area" style="display:none;">
+    {% for i in range(1, 6) %}
+    <div class="settings-card exam-slot-card" id="exam-slot-{{ i }}" style="margin-bottom:16px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <h3 class="settings-section-title" style="margin:0;">📝 考试 {{ i }}</h3>
+            <div id="exam-slot-{{ i }}-status" style="font-size:13px;color:var(--text-muted);">未配置</div>
+        </div>
+
+        <!-- 考试范围 -->
+        <div class="setting-row vertical" style="margin-bottom:12px;">
+            <label style="font-weight:600;">考试范围</label>
+            <p class="setting-desc" style="margin:2px 0 8px;">填写 List 编号范围，可添加多组不连续范围</p>
+            <div id="exam-{{ i }}-ranges" class="exam-ranges-container">
+                <!-- 动态生成 -->
+            </div>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="addRange({{ i }})" style="margin-top:8px;">+ 添加范围</button>
+        </div>
+
+        <!-- 考试容量 -->
+        <div class="setting-row" style="gap:14px;align-items:center;margin-bottom:12px;">
+            <div>
+                <label style="font-weight:600;">考试容量</label>
+                <p class="setting-desc" style="margin:2px 0 0;">从范围内随机选取的单词数量</p>
+            </div>
+            <input type="number" id="exam-{{ i }}-capacity" class="setting-input" value="20" min="1" max="500" style="width:100px;">
+        </div>
+
+        <!-- 通过率 -->
+        <div class="setting-row" style="gap:14px;align-items:center;margin-bottom:12px;">
+            <div>
+                <label style="font-weight:600;">通过率</label>
+                <p class="setting-desc" style="margin:2px 0 0;">正确率不低于此值视为通过</p>
+            </div>
+            <div style="display:flex;align-items:center;gap:4px;">
+                <input type="number" id="exam-{{ i }}-pass-rate" class="setting-input" value="80" min="1" max="100" style="width:80px;"> %
+            </div>
+        </div>
+
+        <!-- 每日考试次数 -->
+        <div class="setting-row" style="gap:14px;align-items:center;margin-bottom:12px;">
+            <div>
+                <label style="font-weight:600;">每日最大考试次数</label>
+                <p class="setting-desc" style="margin:2px 0 0;">学生每天最多可参加次数（打开即计一次）</p>
+            </div>
+            <input type="number" id="exam-{{ i }}-daily-limit" class="setting-input" value="99" min="1" max="999" style="width:80px;">
+        </div>
+
+        <!-- 考试形式（多选） -->
+        <div class="setting-row vertical" style="margin-bottom:12px;">
+            <label style="font-weight:600;">考核方式（可多选）</label>
+            <p class="setting-desc" style="margin:2px 0 8px;">多选时学生可在考试中自由切换模式，切换会重新生成试卷并消耗一次考试次数</p>
+            <div id="exam-{{ i }}-modes" style="display:flex;gap:16px;flex-wrap:wrap;">
+                <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:14px;">
+                    <input type="checkbox" class="exam-mode-cb" value="en2zh" id="exam-{{ i }}-mode-en2zh" checked>
+                    🔤 英→中（看英文写中文）
+                </label>
+                <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:14px;">
+                    <input type="checkbox" class="exam-mode-cb" value="zh2en" id="exam-{{ i }}-mode-zh2en">
+                    🔡 中→英（看中文写英文）
+                </label>
+                <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:14px;">
+                    <input type="checkbox" class="exam-mode-cb" value="audio2zh" id="exam-{{ i }}-mode-audio2zh">
+                    🎧 音→中（听发音写中文）
+                </label>
+            </div>
+        </div>
+
+        <!-- 今日考试次数管理 -->
+        <div class="setting-row vertical" style="margin-bottom:12px;padding:10px 14px;background:var(--gray-100);border-radius:8px;">
+            <label style="font-weight:600;font-size:13px;">📊 今日考试次数</label>
+            <div id="exam-{{ i }}-attempts-info" style="font-size:13px;color:var(--text-muted);margin-top:4px;">
+                选择用户后显示
+            </div>
+            <div id="exam-{{ i }}-attempts-actions" style="display:none;margin-top:8px;gap:8px;align-items:center;">
+                <label style="font-size:12px;color:var(--text-muted);">重置为：</label>
+                <input type="number" id="exam-{{ i }}-reset-count" class="setting-input" value="0" min="0" max="999" style="width:70px;">
+                <button class="btn btn-sm btn-secondary" onclick="resetAttempts({{ i }})">重置次数</button>
+            </div>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div style="display:flex;gap:10px;">
+            <button class="btn btn-primary" onclick="saveExam({{ i }})">保存并推送</button>
+            <button class="btn btn-danger" onclick="deleteExam({{ i }})">清除</button>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Toast -->
+<div id="exam-toast" style="position:fixed;bottom:28px;left:50%;transform:translateX(-50%);padding:10px 22px;border-radius:8px;font-size:14px;font-weight:600;z-index:9999;pointer-events:none;transition:opacity .3s;opacity:0;"></div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const totalLists = {{ list_index_map|length }};
+
+function showExamToast(msg, type) {
+    const t = document.getElementById('exam-toast');
+    t.textContent = msg;
+    t.style.background = type === 'success' ? '#d4edda' : '#f8d7da';
+    t.style.color = type === 'success' ? '#155724' : '#721c24';
+    t.style.opacity = '1';
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => { t.style.opacity = '0'; }, 3000);
+}
+
+function showExamError(msg) {
+    const el = document.getElementById('exam-admin-error');
+    el.textContent = msg;
+    el.style.display = 'block';
+    setTimeout(() => { el.style.display = 'none'; }, 5000);
+}
+
+// 添加一组范围输入
+function addRange(slot, startVal, endVal) {
+    const container = document.getElementById(`exam-${slot}-ranges`);
+    const wrap = document.createElement('div');
+    wrap.className = 'exam-range-pair';
+    wrap.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:6px;';
+    wrap.innerHTML = `
+        <span style="font-size:13px;color:var(--text-muted);">List</span>
+        <input type="number" class="setting-input exam-range-start" placeholder="起" min="1" max="${totalLists}" value="${startVal||''}" style="width:70px;">
+        <span style="font-size:13px;color:var(--text-muted);">~</span>
+        <input type="number" class="setting-input exam-range-end" placeholder="止" min="1" max="${totalLists}" value="${endVal||''}" style="width:70px;">
+        <button type="button" class="btn btn-sm btn-danger" onclick="this.parentElement.remove()" style="padding:2px 8px;font-size:12px;">✕</button>
+    `;
+    container.appendChild(wrap);
+}
+
+// 加载用户考试配置
+async function loadUserExams(username) {
+    const slotsArea = document.getElementById('exam-slots-area');
+    if (!username) {
+        slotsArea.style.display = 'none';
+        return;
+    }
+    slotsArea.style.display = 'block';
+
+    try {
+        const r = await fetch(`/admin/exam_data?user=${encodeURIComponent(username)}`);
+        const data = await r.json();
+        const exams = data.exams || [];
+        for (let i = 0; i < 5; i++) {
+            const slot = i + 1;
+            const exam = exams[i];
+            // 清空范围容器
+            const rangesContainer = document.getElementById(`exam-${slot}-ranges`);
+            rangesContainer.innerHTML = '';
+
+            // 重置 checkbox
+            ['en2zh', 'zh2en', 'audio2zh'].forEach(m => {
+                document.getElementById(`exam-${slot}-mode-${m}`).checked = false;
+            });
+
+            // 考试次数区域
+            const attemptsInfo = document.getElementById(`exam-${slot}-attempts-info`);
+            const attemptsActions = document.getElementById(`exam-${slot}-attempts-actions`);
+
+            if (exam) {
+                // 有配置：回填
+                for (const range of exam.ranges) {
+                    addRange(slot, range[0], range[1]);
+                }
+                document.getElementById(`exam-${slot}-capacity`).value = exam.capacity;
+                document.getElementById(`exam-${slot}-pass-rate`).value = exam.pass_rate || 80;
+                document.getElementById(`exam-${slot}-daily-limit`).value = exam.daily_limit || 99;
+
+                // 回填考核方式（多选）
+                const modes = exam.quiz_modes || [exam.quiz_mode || 'en2zh'];
+                modes.forEach(m => {
+                    const cb = document.getElementById(`exam-${slot}-mode-${m}`);
+                    if (cb) cb.checked = true;
+                });
+
+                // 显示考试次数
+                const todayCount = exam.today_count || 0;
+                const dailyLimit = exam.daily_limit || 99;
+                const attempts = exam.today_attempts || [];
+                let attemptsHtml = `<strong>今日已考：${todayCount}</strong> / ${dailyLimit} 次`;
+                if (attempts.length > 0) {
+                    attemptsHtml += '<div style="margin-top:6px;font-size:12px;">';
+                    attempts.forEach((att, idx) => {
+                        const status = att.finished
+                            ? (att.passed ? `<span style="color:var(--success);">✓ 通过 ${att.percent}%</span>` : `<span style="color:var(--danger);">✗ 未通过 ${att.percent}%</span>`)
+                            : `<span style="color:var(--warning);">⚠ 未完成</span>`;
+                        const adjusted = att.admin_adjusted ? ' <span style="color:var(--text-muted);">(管理员调整)</span>' : '';
+                        attemptsHtml += `<div>${idx + 1}. ${att.started_at} — ${status}${adjusted}</div>`;
+                    });
+                    attemptsHtml += '</div>';
+                }
+                attemptsInfo.innerHTML = attemptsHtml;
+                attemptsActions.style.display = 'flex';
+                document.getElementById(`exam-${slot}-reset-count`).value = todayCount;
+
+                const statusEl = document.getElementById(`exam-slot-${slot}-status`);
+                const modesDisplay = modes.map(m => formatMode(m)).join('/');
+                statusEl.textContent = `已配置 | 容量:${exam.capacity} | ${modesDisplay} | 通过率:${exam.pass_rate||80}% | ${exam.created_at||''}`;
+                statusEl.style.color = 'var(--success)';
+            } else {
+                // 无配置：默认值
+                addRange(slot);
+                document.getElementById(`exam-${slot}-capacity`).value = 20;
+                document.getElementById(`exam-${slot}-pass-rate`).value = 80;
+                document.getElementById(`exam-${slot}-daily-limit`).value = 99;
+                document.getElementById(`exam-${slot}-mode-en2zh`).checked = true;
+                attemptsInfo.textContent = '未配置';
+                attemptsActions.style.display = 'none';
+                const statusEl = document.getElementById(`exam-slot-${slot}-status`);
+                statusEl.textContent = '未配置';
+                statusEl.style.color = 'var(--text-muted)';
+            }
+        }
+    } catch(e) {
+        console.error('loadUserExams error:', e);
+        showExamError('加载考试配置失败：' + (e.message || '网络异常，请检查服务器是否运行'));
+    }
+}
+
+function formatMode(mode) {
+    return {'en2zh':'英→中','zh2en':'中→英','audio2zh':'音→中'}[mode] || mode;
+}
+
+// 保存考试
+async function saveExam(slot) {
+    const username = document.getElementById('exam-user-select').value;
+    if (!username) {
+        showExamError('请先选择用户');
+        return;
+    }
+
+    // 收集范围
+    const rangesContainer = document.getElementById(`exam-${slot}-ranges`);
+    const rangePairs = rangesContainer.querySelectorAll('.exam-range-pair');
+    const ranges = [];
+    for (const pair of rangePairs) {
+        const start = parseInt(pair.querySelector('.exam-range-start').value);
+        const end = parseInt(pair.querySelector('.exam-range-end').value);
+        if (!start || !end) {
+            showExamError(`考试${slot}：有未填写的范围`);
+            return;
+        }
+        if (start > end) {
+            showExamError(`考试${slot}：范围起始不能大于终止 (${start} > ${end})`);
+            return;
+        }
+        ranges.push({start, end});
+    }
+
+    if (ranges.length === 0) {
+        showExamError(`考试${slot}：请至少添加一个范围`);
+        return;
+    }
+
+    const capacity = parseInt(document.getElementById(`exam-${slot}-capacity`).value);
+    const passRate = parseInt(document.getElementById(`exam-${slot}-pass-rate`).value);
+    const dailyLimit = parseInt(document.getElementById(`exam-${slot}-daily-limit`).value);
+
+    // 收集多选考核方式
+    const quizModes = [];
+    ['en2zh', 'zh2en', 'audio2zh'].forEach(m => {
+        if (document.getElementById(`exam-${slot}-mode-${m}`).checked) {
+            quizModes.push(m);
+        }
+    });
+    if (quizModes.length === 0) {
+        showExamError(`考试${slot}：请至少选择一种考核方式`);
+        return;
+    }
+
+    try {
+        const r = await fetch('/admin/exam_save', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                target_user: username,
+                slot: slot,
+                ranges: ranges,
+                capacity: capacity,
+                quiz_modes: quizModes,
+                pass_rate: passRate,
+                daily_limit: dailyLimit
+            })
+        });
+        const data = await r.json();
+        if (data.success) {
+            showExamToast(data.message, 'success');
+            // 刷新该用户配置
+            loadUserExams(username);
+        } else {
+            showExamError(data.message);
+        }
+    } catch(e) {
+        showExamError('保存失败，请重试');
+    }
+}
+
+// 重置考试次数
+async function resetAttempts(slot) {
+    const username = document.getElementById('exam-user-select').value;
+    if (!username) {
+        showExamError('请先选择用户');
+        return;
+    }
+    const newCount = parseInt(document.getElementById(`exam-${slot}-reset-count`).value);
+    if (isNaN(newCount) || newCount < 0) {
+        showExamError('请输入有效的次数');
+        return;
+    }
+    if (!confirm(`确认将 ${username} 考试${slot} 今日考试次数重置为 ${newCount}？`)) return;
+
+    try {
+        const r = await fetch('/admin/exam_reset_attempts', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({target_user: username, slot: slot, new_count: newCount})
+        });
+        const data = await r.json();
+        if (data.success) {
+            showExamToast(data.message, 'success');
+            loadUserExams(username);
+        } else {
+            showExamError(data.message);
+        }
+    } catch(e) {
+        showExamError('重置失败，请重试');
+    }
+}
+
+// 清除考试
+async function deleteExam(slot) {
+    const username = document.getElementById('exam-user-select').value;
+    if (!username) {
+        showExamError('请先选择用户');
+        return;
+    }
+    if (!confirm(`确认清除考试${slot}的配置？`)) return;
+
+    try {
+        const r = await fetch('/admin/exam_delete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({target_user: username, slot: slot})
+        });
+        const data = await r.json();
+        if (data.success) {
+            showExamToast(data.message, 'success');
+            loadUserExams(username);
+        } else {
+            showExamError(data.message);
+        }
+    } catch(e) {
+        showExamError('清除失败，请重试');
+    }
+}
+</script>
+{% endblock %}

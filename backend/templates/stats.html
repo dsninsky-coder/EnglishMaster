@@ -1,0 +1,377 @@
+{% extends "base.html" %}
+{% block title %}学习统计 - 单词大师{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h2>📊 学习统计</h2>
+    <p class="page-desc">追踪你的学习进度和成绩</p>
+</div>
+
+{% if all_users %}
+<!-- 管理员用户切换器 -->
+<div class="admin-stats-switcher">
+    <label>查看用户统计：</label>
+    <select id="stats-user-select" onchange="switchStatsUser(this.value)" class="setting-input" style="width:auto;display:inline-block">
+        <option value="">── 我自己 ──</option>
+        {% for u in all_users %}
+        <option value="{{ u }}" {% if view_user == u %}selected{% endif %}>👤 {{ u }}</option>
+        {% endfor %}
+    </select>
+    {% if view_user %}
+    <span class="badge badge-warning" style="margin-left:8px;">正在查看：{{ view_user }} 的统计</span>
+    <a href="{{ url_for('wordmaster.stats') }}" class="btn btn-sm btn-secondary" style="margin-left:8px;">返回我的统计</a>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if view_user %}
+<div class="alert alert-info" style="margin-bottom:16px;">
+    📋 以下为用户 <strong>{{ view_user }}</strong> 的学习数据（只读）
+</div>
+{% endif %}
+
+<!-- 总体摘要卡片 -->
+<div class="stats-summary">
+    <div class="summary-card">
+        <div class="summary-num">{{ learned_lists|length }}</div>
+        <div class="summary-label">已学列表</div>
+    </div>
+    <div class="summary-card">
+        <div class="summary-num">{{ total_quizzes }}</div>
+        <div class="summary-label">测验次数</div>
+    </div>
+    <div class="summary-card">
+        <div class="summary-num">{{ total_words }}</div>
+        <div class="summary-label">累计答题</div>
+    </div>
+    <div class="summary-card">
+        <div class="summary-num">{{ avg_percent }}%</div>
+        <div class="summary-label">平均正确率</div>
+    </div>
+</div>
+
+<!-- 分类统计 -->
+<div class="mode-stats-row">
+    <div class="mode-stats-card mode-en2zh">
+        <div class="mode-stats-header">
+            <span class="mode-stats-icon">📖</span>
+            <span class="mode-stats-title">新背</span>
+        </div>
+        <div class="mode-stats-body">
+            <div class="mode-stat-item">
+                <span class="mode-stat-num">{{ study_stats.count }}</span>
+                <span class="mode-stat-label">次测验</span>
+            </div>
+            <div class="mode-stat-item">
+                <span class="mode-stat-num {{ 'stat-good' if study_stats.pass_rate >= 80 else 'stat-bad' }}">
+                    {{ study_stats.pass_rate }}%
+                </span>
+                <span class="mode-stat-label">通过率</span>
+            </div>
+            <div class="mode-stat-item">
+                <span class="mode-stat-num {{ 'stat-good' if study_stats.avg_percent >= 80 else 'stat-bad' }}">
+                    {{ study_stats.avg_percent }}%
+                </span>
+                <span class="mode-stat-label">平均正确率</span>
+            </div>
+        </div>
+    </div>
+    <div class="mode-stats-card mode-zh2en">
+        <div class="mode-stats-header">
+            <span class="mode-stats-icon">🔄</span>
+            <span class="mode-stats-title">复习</span>
+        </div>
+        <div class="mode-stats-body">
+            <div class="mode-stat-item">
+                <span class="mode-stat-num">{{ review_stats.count }}</span>
+                <span class="mode-stat-label">次测验</span>
+            </div>
+            <div class="mode-stat-item">
+                <span class="mode-stat-num {{ 'stat-good' if review_stats.pass_rate >= 80 else 'stat-bad' }}">
+                    {{ review_stats.pass_rate }}%
+                </span>
+                <span class="mode-stat-label">通过率</span>
+            </div>
+            <div class="mode-stat-item">
+                <span class="mode-stat-num {{ 'stat-good' if review_stats.avg_percent >= 80 else 'stat-bad' }}">
+                    {{ review_stats.avg_percent }}%
+                </span>
+                <span class="mode-stat-label">平均正确率</span>
+            </div>
+        </div>
+    </div>
+    <div class="mode-stats-card" style="border-color:var(--danger);background:var(--danger-light, #fff5f5);">
+        <div class="mode-stats-header">
+            <span class="mode-stats-icon">📝</span>
+            <span class="mode-stats-title">考试</span>
+        </div>
+        <div class="mode-stats-body">
+            <div class="mode-stat-item">
+                <span class="mode-stat-num">{{ exam_stats.count }}</span>
+                <span class="mode-stat-label">次考试</span>
+            </div>
+            <div class="mode-stat-item">
+                <span class="mode-stat-num {{ 'stat-good' if exam_stats.pass_rate >= 80 else 'stat-bad' }}">
+                    {{ exam_stats.pass_rate }}%
+                </span>
+                <span class="mode-stat-label">通过率</span>
+            </div>
+            <div class="mode-stat-item">
+                <span class="mode-stat-num {{ 'stat-good' if exam_stats.avg_percent >= 80 else 'stat-bad' }}">
+                    {{ exam_stats.avg_percent }}%
+                </span>
+                <span class="mode-stat-label">平均正确率</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 分模式统计（答题方向）-->
+<div class="mode-stats-row">
+    <div class="mode-stats-card mode-en2zh">
+        <div class="mode-stats-header">
+            <span class="mode-stats-icon">🔤</span>
+            <span class="mode-stats-title">英 → 中</span>
+        </div>
+        <div class="mode-stats-body">
+            <div class="mode-stat-item">
+                <span class="mode-stat-num">{{ en2zh_stats.count }}</span>
+                <span class="mode-stat-label">次测验</span>
+            </div>
+            <div class="mode-stat-item">
+                <span class="mode-stat-num">{{ en2zh_stats.words }}</span>
+                <span class="mode-stat-label">累计答题</span>
+            </div>
+            <div class="mode-stat-item">
+                <span class="mode-stat-num {{ 'stat-good' if en2zh_stats.avg_percent >= 80 else 'stat-bad' }}">
+                    {{ en2zh_stats.avg_percent }}%
+                </span>
+                <span class="mode-stat-label">平均正确率</span>
+            </div>
+        </div>
+    </div>
+    <div class="mode-stats-card mode-zh2en">
+        <div class="mode-stats-header">
+            <span class="mode-stats-icon">🔡</span>
+            <span class="mode-stats-title">中 → 英</span>
+        </div>
+        <div class="mode-stats-body">
+            <div class="mode-stat-item">
+                <span class="mode-stat-num">{{ zh2en_stats.count }}</span>
+                <span class="mode-stat-label">次测验</span>
+            </div>
+            <div class="mode-stat-item">
+                <span class="mode-stat-num">{{ zh2en_stats.words }}</span>
+                <span class="mode-stat-label">累计答题</span>
+            </div>
+            <div class="mode-stat-item">
+                <span class="mode-stat-num {{ 'stat-good' if zh2en_stats.avg_percent >= 80 else 'stat-bad' }}">
+                    {{ zh2en_stats.avg_percent }}%
+                </span>
+                <span class="mode-stat-label">平均正确率</span>
+            </div>
+        </div>
+    </div>
+    <div class="mode-stats-card" style="border-color:var(--warning);">
+        <div class="mode-stats-header">
+            <span class="mode-stats-icon">🎧</span>
+            <span class="mode-stats-title">音 → 中</span>
+        </div>
+        <div class="mode-stats-body">
+            <div class="mode-stat-item">
+                <span class="mode-stat-num">{{ audio2zh_stats.count }}</span>
+                <span class="mode-stat-label">次测验</span>
+            </div>
+            <div class="mode-stat-item">
+                <span class="mode-stat-num">{{ audio2zh_stats.words }}</span>
+                <span class="mode-stat-label">累计答题</span>
+            </div>
+            <div class="mode-stat-item">
+                <span class="mode-stat-num {{ 'stat-good' if audio2zh_stats.avg_percent >= 80 else 'stat-bad' }}">
+                    {{ audio2zh_stats.avg_percent }}%
+                </span>
+                <span class="mode-stat-label">平均正确率</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 标签页 -->
+<div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('records', this)">📝 成绩记录</button>
+    <button class="tab-btn" onclick="switchTab('calendar', this)">📅 日历视图</button>
+</div>
+
+<!-- 成绩记录 -->
+<div id="tab-records" class="tab-content">
+    <!-- 筛选 -->
+    <div class="records-filter">
+        <button class="filter-btn active" onclick="filterRecords('all', this)">全部</button>
+        <button class="filter-btn" onclick="filterRecords('study', this)">新背</button>
+        <button class="filter-btn" onclick="filterRecords('review', this)">复习</button>
+        <button class="filter-btn" onclick="filterRecords('exam', this)">考试</button>
+        <button class="filter-btn" onclick="filterRecords('en2zh', this)">英→中</button>
+        <button class="filter-btn" onclick="filterRecords('zh2en', this)">中→英</button>
+        <button class="filter-btn" onclick="filterRecords('audio2zh', this)">音→中</button>
+    </div>
+
+    {% if history.quiz_results %}
+    <div class="table-wrap">
+        <table class="records-table">
+            <thead>
+                <tr>
+                    <th>时间</th>
+                    <th>列表</th>
+                    <th>类型</th>
+                    <th>方向</th>
+                    <th>正确/总数</th>
+                    <th>正确率</th>
+                    <th>结果</th>
+                </tr>
+            </thead>
+            <tbody id="records-tbody">
+                {% for rec in history.quiz_results|reverse %}
+                <tr class="record-row"
+                    data-mode="{{ rec.mode if rec.mode is defined else 'study' }}"
+                    data-quiz-mode="{{ rec.quiz_mode if rec.quiz_mode is defined else 'en2zh' }}">
+                    <td class="time-cell">{{ rec.time }}</td>
+                    <td><span class="list-tag">{{ rec.list }}</span></td>
+                    <td>
+                        {% if rec.mode is defined and rec.mode == 'review' %}
+                        <span class="badge badge-warning">复习</span>
+                        {% elif rec.mode is defined and rec.mode == 'exam' %}
+                        <span class="badge badge-danger">考试</span>
+                        {% else %}
+                        <span class="badge badge-primary">新背</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if rec.quiz_mode is defined and rec.quiz_mode == 'zh2en' %}
+                        <span class="badge badge-info">中→英</span>
+                        {% elif rec.quiz_mode is defined and rec.quiz_mode == 'audio2zh' %}
+                        <span class="badge" style="background:var(--warning-light);color:var(--warning);">音→中</span>
+                        {% else %}
+                        <span class="badge badge-secondary">英→中</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ rec.score | default('-') }}</td>
+                    <td>
+                        {% set pct = rec.percent | default(0) %}
+                        <div class="mini-bar">
+                            <div class="mini-bar-fill {% if pct >= 80 %}fill-green{% else %}fill-red{% endif %}"
+                                 style="width: {{ pct }}%"></div>
+                        </div>
+                        {{ pct }}%
+                    </td>
+                    <td>
+                        {% if rec.passed | default(false) %}
+                        <span class="badge badge-success">通过✓</span>
+                        {% else %}
+                        <span class="badge badge-danger">未过✗</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="empty-icon">📭</div>
+        <p>还没有成绩记录，快去学习吧！</p>
+        <a href="{{ url_for('wordmaster.study') }}" class="btn btn-primary">开始学习</a>
+    </div>
+    {% endif %}
+</div>
+
+<!-- 日历视图 -->
+<div id="tab-calendar" class="tab-content" style="display:none">
+    <div class="calendar-nav">
+        <a href="{{ url_for('wordmaster.stats', year=prev_year, month=prev_month) }}" class="cal-nav-btn">‹ 上月</a>
+        <span class="cal-month-title">{{ year }}年{{ month }}月</span>
+        <a href="{{ url_for('wordmaster.stats', year=next_year, month=next_month) }}" class="cal-nav-btn">下月 ›</a>
+    </div>
+
+    <div class="calendar-legend">
+        <span class="legend-item"><span class="legend-dot dot-green"></span>完成目标</span>
+        <span class="legend-item"><span class="legend-dot dot-red"></span>未达标</span>
+        <span class="legend-item"><span class="legend-dot dot-gray"></span>无记录</span>
+    </div>
+
+    <div class="calendar-wrap">
+        <table class="calendar-table">
+            <thead>
+                <tr>
+                    <th>一</th><th>二</th><th>三</th><th>四</th><th>五</th>
+                    <th class="weekend">六</th><th class="weekend">日</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for week in calendar_cells %}
+                <tr>
+                    {% for day in week %}
+                    {% if day != '' %}
+                        {% set date_str = "%04d-%02d-%02d"|format(year, month, day) %}
+                        {% set status = daily_status.get(date_str, 'none') %}
+                        <td class="cal-day cal-{{ status }}">
+                            <span class="day-num">{{ day }}</span>
+                            {% if status == 'green' %}
+                            <span class="day-dot dot-green"></span>
+                            {% elif status == 'red' %}
+                            <span class="day-dot dot-red"></span>
+                            {% endif %}
+                        </td>
+                    {% else %}
+                        <td class="cal-day cal-empty"></td>
+                    {% endif %}
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="cal-desc">
+        <p>🟢 绿色：当天完成至少一个 list 学习，且复习全部合格（或无待复习）</p>
+        <p>🔴 红色：当天有活动但未达标（复习未通过）</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function switchStatsUser(username) {
+    if (username) {
+        window.location.href = '/stats?user=' + encodeURIComponent(username);
+    } else {
+        window.location.href = '/stats';
+    }
+}
+
+function switchTab(name, btn) {
+    document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
+    document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+    document.getElementById('tab-' + name).style.display = 'block';
+    btn.classList.add('active');
+}
+
+function filterRecords(filter, btn) {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    const rows = document.querySelectorAll('.record-row');
+    rows.forEach(row => {
+        const mode = row.dataset.mode;
+        const quizMode = row.dataset.quizMode;
+        let show = false;
+        if (filter === 'all') show = true;
+        else if (filter === 'study') show = (mode === 'study');
+        else if (filter === 'review') show = (mode === 'review');
+        else if (filter === 'exam') show = (mode === 'exam');
+        else if (filter === 'en2zh') show = (quizMode === 'en2zh');
+        else if (filter === 'zh2en') show = (quizMode === 'zh2en');
+        else if (filter === 'audio2zh') show = (quizMode === 'audio2zh');
+        row.style.display = show ? '' : 'none';
+    });
+}
+</script>
+{% endblock %}

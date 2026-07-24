@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+{% block title %}新背单词 - 单词大师{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h2>📖 新背单词</h2>
+    <p class="page-desc">选择一个单词列表开始学习</p>
+</div>
+
+{% if must_review %}
+<div class="alert alert-warning">
+    {% if review_mode == 'once' %}
+    ⚠️ 你有 <strong>{{ review_count }}</strong> 个单词待复习，今日尚未完成复习，请先完成一次复习（正确率≥80%）再开始新背！
+    {% else %}
+    ⚠️ 你有 <strong>{{ review_count }}</strong> 个单词待复习，请先完成复习再开始新背！
+    {% endif %}
+    <a href="{{ url_for('wordmaster.review') }}" class="btn btn-sm btn-warning" style="margin-left:12px;">去复习</a>
+</div>
+{% elif review_count > 0 %}
+<div class="alert alert-info">
+    💡 你有 <strong>{{ review_count }}</strong> 个单词待复习
+    <a href="{{ url_for('wordmaster.review') }}" class="btn btn-sm btn-secondary" style="margin-left:12px;">先去复习</a>
+</div>
+{% endif %}
+
+<div class="lists-grid">
+    {% for name in lists %}
+    <div class="list-card {% if name in learned_lists %}learned{% endif %}" data-list="{{ name }}" id="list-{{ name }}"
+         style="scroll-margin-top: 80px;">
+        <div class="list-card-header">
+            <span class="list-name">{{ name }}</span>
+            {% if name in learned_lists %}
+                {% set res = last_study_result.get(name) %}
+                {% if res %}
+                    {% if res.passed %}
+                    <span class="badge badge-success">✓ {{ res.percent }}%</span>
+                    {% else %}
+                    <span class="badge badge-danger">✗ {{ res.percent }}%</span>
+                    {% endif %}
+                {% else %}
+                <span class="badge badge-success">已学✓</span>
+                {% endif %}
+            {% else %}
+            <span class="badge badge-primary">未学</span>
+            {% endif %}
+        </div>
+        <div class="list-card-body">
+            <div class="word-count">{{ list_word_count.get(name, 0) }} 个单词</div>
+        </div>
+        <div class="list-card-actions">
+            <button class="btn btn-sm btn-secondary" onclick="previewList('{{ name }}')">预览</button>
+            {% if name in cooldowns %}
+            <button class="btn btn-sm btn-primary" disabled id="btn-{{ name | replace(' ', '_') }}">
+                冷却中 <span id="cd-{{ name | replace(' ', '_') }}">{{ cooldowns[name] }}</span>s
+            </button>
+            {% elif name in learned_lists %}
+            <button class="btn btn-sm btn-success" onclick="startStudy('{{ name }}', true)">重新挑战</button>
+            {% else %}
+            <button class="btn btn-sm btn-primary" onclick="startStudy('{{ name }}', false)">开始学习</button>
+            {% endif %}
+        </div>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="empty-icon">📭</div>
+        <p>暂无单词列表，<a href="{{ url_for('wordmaster.import_words') }}">去导入单词</a></p>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- 预览弹窗 -->
+<div id="preview-modal" class="preview-modal" style="display:none">
+    <div class="preview-modal-overlay" onclick="closeModal()"></div>
+    <div class="preview-modal-box">
+        <div class="modal-header">
+            <h3 id="modal-title">单词预览</h3>
+            <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <div class="preview-modal-body">
+            <div id="preview-content"></div>
+        </div>
+        <div class="preview-modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">关闭</button>
+            <button class="btn btn-primary" id="modal-start-btn">开始学习</button>
+        </div>
+    </div>
+</div>
+
+<!-- 复习警告弹窗 -->
+<div id="review-warn-modal" class="preview-modal" style="display:none">
+    <div class="preview-modal-overlay" onclick="closeReviewWarn()"></div>
+    <div class="preview-modal-box">
+        <div class="modal-header">
+            <h3>⚠️ 需要先复习</h3>
+            <button class="modal-close" onclick="closeReviewWarn()">✕</button>
+        </div>
+        <div class="preview-modal-body">
+            <p id="review-warn-text"></p>
+        </div>
+        <div class="preview-modal-footer">
+            <button class="btn btn-secondary" onclick="closeReviewWarn()">取消</button>
+            <a href="{{ url_for('wordmaster.review') }}" class="btn btn-warning">去复习</a>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const learnedLists = {{ learned_lists | tojson }};
+
+// 冷却倒计时
+(function initCooldowns() {
+    const cooldowns = {{ cooldowns | tojson }};
+    for (const [name, remaining] of Object.entries(cooldowns)) {
+        const safeId = name.replace(/ /g, '_');
+        const span = document.getElementById('cd-' + safeId);
+        const btn = document.getElementById('btn-' + safeId);
+        if (!span || !btn) continue;
+        let secs = remaining;
+        const timer = setInterval(() => {
+            secs--;
+            if (secs <= 0) {
+                clearInterval(timer);
+                btn.disabled = false;
+                btn.textContent = '重新挑战';
+                btn.className = 'btn btn-sm btn-success';
+                btn.onclick = () => startStudy(name, true);
+                return;
+            }
+            span.textContent = secs;
+        }, 1000);
+    }
+})();
+
+async function previewList(listName) {
+    const isRechallenge = learnedLists.includes(listName);
+    const res = await fetch('/study/preview', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({list_name: listName})
+    });
+    const data = await res.json();
+    if (data.success) {
+        document.getElementById('modal-title').textContent = `${data.list_name} — 共 ${data.total} 个单词`;
+        const html = data.preview.map(w => {
+            const safeWord = w.word.replace(/'/g, "\\'");
+            return `<div class="preview-word-row">
+                <div class="pw-left">
+                    <span class="pw-en">${w.word}</span>
+                    <button class="pw-speak-btn pw-speak-us" onclick="speakPreviewWord('${safeWord}', 0)" title="美音发音">【美音】</button>
+                    <button class="pw-speak-btn pw-speak-uk" onclick="speakPreviewWord('${safeWord}', 1)" title="英音发音">【英音】</button>
+                </div>
+                <span class="pw-zh">${w.meaning}</span>
+            </div>`;
+        }).join('');
+        document.getElementById('preview-content').innerHTML = html;
+        document.getElementById('modal-start-btn').onclick = () => {
+            closeModal();
+            startStudy(listName, isRechallenge);
+        };
+        document.getElementById('modal-start-btn').textContent = isRechallenge ? '重新挑战' : '开始学习';
+        document.getElementById('preview-modal').style.display = 'flex';
+    }
+}
+
+function closeModal() {
+    document.getElementById('preview-modal').style.display = 'none';
+}
+
+// 预览界面发音（有道API，type=0美音，type=1英音）
+function speakPreviewWord(word, type) {
+    if (!word) return;
+    const url = `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(word)}&type=${type}`;
+    const audio = new Audio(url);
+    audio.play().catch(() => {});
+}
+
+function closeReviewWarn() {
+    document.getElementById('review-warn-modal').style.display = 'none';
+}
+
+// ---- 锚点定位（学完返回时跳到对应词单）----
+window.addEventListener('DOMContentLoaded', () => {
+    const hash = decodeURIComponent(location.hash); // e.g. #list-list100
+    if (hash && hash.startsWith('#list-')) {
+        const el = document.getElementById('list-' + hash.slice(6));
+        if (el) {
+            setTimeout(() => {
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                // 短暂高亮
+                el.style.transition = 'box-shadow 0.4s';
+                el.style.boxShadow = '0 0 0 3px var(--primary)';
+                setTimeout(() => { el.style.boxShadow = ''; }, 1800);
+            }, 150);
+        }
+    }
+});
+
+async function startStudy(listName, isRechallenge) {
+    const res = await fetch('/study/start', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({list_name: listName, is_rechallenge: isRechallenge || false})
+    });
+    const data = await res.json();
+    if (data.success) {
+        window.location.href = '/learn?type=study';
+    } else if (data.need_review) {
+        // 弹出复习警告弹窗
+        document.getElementById('review-warn-text').textContent =
+            `你有 ${data.review_count} 个单词待复习，请先完成复习再开始新背！`;
+        document.getElementById('review-warn-modal').style.display = 'flex';
+    } else {
+        alert('开始失败：' + data.error);
+    }
+}
+</script>
+{% endblock %}

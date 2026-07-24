@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}设置 - 单词大师{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h2>⚙️ 设置</h2>
+    <p class="page-desc">自定义你的学习体验</p>
+</div>
+
+{% if msg %}
+<div class="alert alert-{{ msg[0] }}">{{ msg[1] }}</div>
+{% endif %}
+
+{% if controlled_fields %}
+<div class="alert alert-warning controlled-notice">
+    🔒 <strong>部分设置已被管理员锁定</strong>，以下字段由管理员统一管控，您无法自行修改。如需调整，请联系管理员取消管控。
+</div>
+{% endif %}
+
+<div class="settings-layout">
+    <!-- 学习设置 -->
+    <div class="settings-card">
+        <h3 class="settings-section-title">📚 学习设置</h3>
+        <form method="post">
+            <input type="hidden" name="action" value="save_config">
+
+            <div class="setting-row {% if 'review_count' in controlled_fields %}setting-locked{% endif %}">
+                <div class="setting-info">
+                    <label for="review_count">
+                        每次复习单词数
+                        {% if 'review_count' in controlled_fields %}
+                        <span class="lock-badge">🔒 管理员锁定</span>
+                        {% endif %}
+                    </label>
+                    <p class="setting-desc">每次复习时从待复习单词中抽取的数量</p>
+                </div>
+                <input type="number" id="review_count" name="review_count"
+                       value="{{ config.review_count }}" min="5" max="200" class="setting-input"
+                       {% if 'review_count' in controlled_fields %}disabled{% endif %}>
+            </div>
+
+            <div class="setting-row {% if 'require_review_before_study' in controlled_fields %}setting-locked{% endif %}">
+                <div class="setting-info">
+                    <label>
+                        新背前必须先完成复习
+                        {% if 'require_review_before_study' in controlled_fields %}
+                        <span class="lock-badge">🔒 管理员锁定</span>
+                        {% endif %}
+                    </label>
+                    <p class="setting-desc">开启后，有待复习单词时不能直接新背</p>
+                </div>
+                <label class="toggle-switch {% if 'require_review_before_study' in controlled_fields %}toggle-disabled{% endif %}">
+                    <input type="checkbox" name="require_review"
+                           {% if config.require_review_before_study %}checked{% endif %}
+                           {% if 'require_review_before_study' in controlled_fields %}disabled{% endif %}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+
+            <div class="setting-row {% if 'require_both_modes' in controlled_fields %}setting-locked{% endif %}">
+                <div class="setting-info">
+                    <label>
+                        两种模式都要求正确
+                        {% if 'require_both_modes' in controlled_fields %}
+                        <span class="lock-badge">🔒 管理员锁定</span>
+                        {% endif %}
+                    </label>
+                    <p class="setting-desc">开启后，英译中和中译英都答对才算通过</p>
+                </div>
+                <label class="toggle-switch {% if 'require_both_modes' in controlled_fields %}toggle-disabled{% endif %}">
+                    <input type="checkbox" name="require_both_modes"
+                           {% if config.require_both_modes %}checked{% endif %}
+                           {% if 'require_both_modes' in controlled_fields %}disabled{% endif %}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+
+            <h3 class="settings-section-title" style="margin-top:24px;">🤖 AI 判断设置</h3>
+
+            {% if is_api_controlled %}
+            <div class="alert alert-info" style="margin-bottom:12px">
+                ✅ 管理员已为您开通共享 AI API，答题将自动使用 AI 智能判题，无需配置 Key。
+                <br>当前模型：<strong>{{ config.get('ai_model', 'deepseek-chat') }}</strong>
+            </div>
+            {% else %}
+            <p class="setting-desc">配置 AI API，用 AI 智能判断答案是否正确（英中/中英均可使用）</p>
+
+            <div class="setting-row vertical">
+                <label for="api_key">API Key</label>
+                <input type="password" id="api_key" name="api_key"
+                       value="{{ config.chatgpt_api_key }}"
+                       placeholder="sk-..." class="setting-input-full">
+            </div>
+
+            <div class="setting-row vertical">
+                <label for="base_url">API Base URL</label>
+                <input type="text" id="base_url" name="base_url"
+                       value="{{ config.get('chatgpt_base_url', 'https://api.openai.com/v1') }}"
+                       placeholder="https://api.openai.com/v1"
+                       class="setting-input-full">
+                <p class="setting-desc">如使用代理或第三方服务，修改此地址</p>
+            </div>
+
+            <div class="setting-row vertical">
+                <label for="ai_model">AI 模型名称</label>
+                <input type="text" id="ai_model" name="ai_model"
+                       value="{{ config.get('ai_model', 'deepseek-chat') }}"
+                       placeholder="deepseek-chat"
+                       class="setting-input-full">
+                <p class="setting-desc">例如：deepseek-chat、gpt-3.5-turbo、gpt-4o 等</p>
+            </div>
+            {% endif %}
+
+            <div class="settings-actions">
+                <button type="submit" class="btn btn-primary">保存设置</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- 密码修改 -->
+    <div class="settings-card">
+        <h3 class="settings-section-title">🔒 修改密码</h3>
+        <form method="post">
+            <input type="hidden" name="action" value="change_password">
+
+            <div class="setting-row vertical">
+                <label for="old_password">当前密码</label>
+                <input type="password" id="old_password" name="old_password"
+                       placeholder="输入当前密码" class="setting-input-full" autocomplete="current-password">
+            </div>
+            <div class="setting-row vertical">
+                <label for="new_password">新密码</label>
+                <input type="password" id="new_password" name="new_password"
+                       placeholder="至少4个字符" class="setting-input-full" autocomplete="new-password">
+            </div>
+            <div class="setting-row vertical">
+                <label for="confirm_password">确认新密码</label>
+                <input type="password" id="confirm_password" name="confirm_password"
+                       placeholder="再次输入新密码" class="setting-input-full" autocomplete="new-password">
+            </div>
+
+            <div class="settings-actions">
+                <button type="submit" class="btn btn-secondary">修改密码</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

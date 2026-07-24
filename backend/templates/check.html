@@ -1,0 +1,705 @@
+{% extends "base.html" %}
+{% block title %}{% if type == 'study' %}新背单词{% elif type == 'review' %}复习{% else %}考试{% endif %} - 单词大师{% endblock %}
+{% block content %}
+<div class="quiz-container">
+    <!-- 顶部进度区 -->
+    <div class="quiz-header">
+        <div class="quiz-title" id="quiz-title">
+            {% if type == 'study' %}📖 新背单词{% elif type == 'review' %}🔄 复习{% else %}📝 考试{% endif %}
+        </div>
+        <div class="quiz-progress-wrap">
+            <div class="quiz-progress-bar">
+                <div class="quiz-progress-fill" id="progress-fill" style="width:0%"></div>
+            </div>
+            <span class="quiz-progress-text" id="progress-text">0 / 0</span>
+        </div>
+    </div>
+
+    <!-- 模式切换 -->
+    {% if type == 'exam' %}
+    {% set show_en2zh = 'en2zh' in exam_quiz_modes %}
+    {% set show_zh2en = 'zh2en' in exam_quiz_modes %}
+    {% set show_audio2zh = 'audio2zh' in exam_quiz_modes %}
+    {% set has_multiple_modes = exam_quiz_modes|length > 1 %}
+    {% else %}
+    {% set show_en2zh = true %}
+    {% set show_zh2en = true %}
+    {% set show_audio2zh = audio2zh_enabled %}
+    {% set has_multiple_modes = true %}
+    {% endif %}
+
+    {% if has_multiple_modes %}
+    <div class="mode-switcher">
+        {% if show_en2zh %}
+        <button id="btn-en2zh" class="mode-btn {% if mode == 'en2zh' %}active{% endif %}" onclick="requestSwitchMode('en2zh')">
+            🔤 英→中
+        </button>
+        {% endif %}
+        {% if show_zh2en %}
+        <button id="btn-zh2en" class="mode-btn {% if mode == 'zh2en' %}active{% endif %}" onclick="requestSwitchMode('zh2en')">
+            🔡 中→英
+        </button>
+        {% endif %}
+        {% if show_audio2zh %}
+        <button id="btn-audio2zh" class="mode-btn {% if mode == 'audio2zh' %}active{% endif %}" onclick="requestSwitchMode('audio2zh')">
+            🎧 音→中
+        </button>
+        {% endif %}
+    </div>
+    {% else %}
+    <div class="mode-switcher" style="display:none"></div>
+    {% endif %}
+
+    <!-- 题目区 -->
+    <div class="quiz-card" id="quiz-card">
+        <div class="quiz-word-label" id="word-label">单词</div>
+        <div class="quiz-word-row" id="quiz-word-row">
+            <div class="quiz-word" id="question">...</div>
+            <div id="speak-btn" class="speak-btns" style="display:none">
+                <button class="speak-btn"
+                        onclick="speakWordLocal(currentWord && currentWord.word)"
+                        title="浏览器朗读（离线）">
+                    🔊
+                </button>
+                <button class="speak-btn speak-btn-youdao"
+                        onclick="speakWordYoudao(currentWord && currentWord.word, 0)"
+                        title="有道美音发音（在线）">
+                    🇺🇸
+                </button>
+                <button class="speak-btn speak-btn-youdao"
+                        onclick="speakWordYoudao(currentWord && currentWord.word, 1)"
+                        title="有道英音发音（在线）">
+                    🇬🇧
+                </button>
+            </div>
+        </div>
+        <!-- 音译汉模式：大发音按钮区（隐藏单词文字） -->
+        <div id="audio-play-area" style="display:none;text-align:center;padding:20px 0;">
+            <p style="color:var(--gray-500);font-size:14px;margin-bottom:18px;">🎧 听发音，写出中文意思</p>
+            <div style="display:flex;gap:18px;justify-content:center;">
+                <button class="audio-big-btn" onclick="speakWordLocal(currentWord && currentWord.word)"
+                        title="浏览器朗读（离线）">
+                    <span class="audio-big-icon">🔊</span>
+                    <span class="audio-big-label">离线发音</span>
+                </button>
+                <button class="audio-big-btn audio-big-btn-youdao"
+                        onclick="speakWordYoudao(currentWord && currentWord.word, 0)"
+                        title="有道美音发音（在线）">
+                    <span class="audio-big-icon">🇺🇸</span>
+                    <span class="audio-big-label">美音</span>
+                </button>
+                <button class="audio-big-btn audio-big-btn-youdao audio-big-btn-youdao-uk"
+                        onclick="speakWordYoudao(currentWord && currentWord.word, 1)"
+                        title="有道英音发音（在线）">
+                    <span class="audio-big-icon">🇬🇧</span>
+                    <span class="audio-big-label">英音</span>
+                </button>
+            </div>
+        </div>
+        <div class="quiz-phonetic" id="phonetic"></div>
+    </div>
+
+    <!-- 输入区 -->
+    <div id="input-area" class="input-area"></div>
+
+    <!-- 结果提示 -->
+    <div id="result-box" class="result-box" style="display:none">
+        <div id="result-text"></div>
+        <div id="expected-text" class="expected-hint"></div>
+        <div id="ai-response-text" style="display:none;margin-top:6px;padding:8px 10px;background:rgba(99,102,241,0.08);border-radius:6px;font-size:12px;color:#5b5fc7;border:1px solid rgba(99,102,241,0.2);"></div>
+    </div>
+
+    <!-- 操作按钮 -->
+    <div class="quiz-actions">
+        <button id="submit-btn" class="btn btn-primary btn-lg" onclick="submitAnswer()">
+            提 交 <kbd>Enter</kbd>
+        </button>
+        <button id="next-btn" class="btn btn-success btn-lg" style="display:none" onclick="handleNext()">
+            下一个 →
+        </button>
+        <button id="ticket-btn" class="btn btn-sm" style="display:none;background:#f5a623;color:#fff;font-size:.85em;" onclick="useTicket()">
+            🎟️ 使用免错券
+        </button>
+    </div>
+
+    <!-- 完成界面 -->
+    <div id="finish-panel" class="finish-panel" style="display:none">
+        <div class="finish-icon" id="finish-icon">🎉</div>
+        <h2 id="finish-title">完成！</h2>
+        <div class="finish-stats">
+            <div class="stat-item">
+                <div class="stat-num" id="stat-correct">-</div>
+                <div class="stat-label">正确</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-num" id="stat-total">-</div>
+                <div class="stat-label">总数</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-num" id="stat-percent">-</div>
+                <div class="stat-label">正确率</div>
+            </div>
+        </div>
+        <div id="cooldown-tip" class="cooldown-tip" style="display:none"></div>
+        <div id="coin-grant-tip" style="display:none;margin:10px 0;padding:10px 16px;
+             background:linear-gradient(90deg,#f6d365,#fda085);border-radius:10px;
+             color:#fff;font-weight:700;font-size:1em;text-align:center;"></div>
+        <div class="finish-actions">
+            {% if type == 'exam' %}
+            <a href="{{ url_for('wordmaster.exam') }}" class="btn btn-primary">返回考试列表</a>
+            <a href="{{ url_for('wordmaster.stats') }}" class="btn btn-secondary">查看统计</a>
+            {% else %}
+            <a href="{{ url_for('wordmaster.study') }}" class="btn btn-primary">继续学习</a>
+            <a href="{{ url_for('wordmaster.review') }}" class="btn btn-secondary">去复习</a>
+            <a href="{{ url_for('wordmaster.stats') }}" class="btn btn-secondary">查看统计</a>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- 切换模式确认弹窗 -->
+<div id="switch-modal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+        <div class="modal-icon">⚠️</div>
+        <h3 class="modal-title">切换答题模式</h3>
+        <p class="modal-desc" id="switch-modal-desc">切换模式将会<strong>清空当前答题进度</strong>，从头开始。<br>确认要切换吗？</p>
+        <div class="modal-actions">
+            <button class="btn btn-danger" onclick="confirmSwitchMode()">确认切换</button>
+            <button class="btn btn-secondary" onclick="cancelSwitchMode()">取消</button>
+        </div>
+    </div>
+</div>
+
+<input type="hidden" id="quiz-type" value="{{ type }}">
+<input type="hidden" id="tts-in-en2zh" value="{{ '1' if tts_in_en2zh else '0' }}">
+<input type="hidden" id="audio2zh-enabled" value="{{ '1' if audio2zh_enabled else '0' }}">
+<input type="hidden" id="ticket-active" value="{{ '1' if ticket_active else '0' }}">
+<input type="hidden" id="exam-slot" value="{{ exam_slot }}">
+<input type="hidden" id="exam-pass-rate" value="{{ exam_pass_rate }}">
+{% if type == 'exam' and exam_quiz_modes|length > 1 %}
+<input type="hidden" id="exam-has-multiple-modes" value="1">
+{% else %}
+<input type="hidden" id="exam-has-multiple-modes" value="0">
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ---- 音效（Web Audio API 合成，无需外部文件）----
+const _ac = new (window.AudioContext || window.webkitAudioContext)();
+
+function playCorrectSound() {
+    // 上升双音：C5 → E5，清脆胜利感
+    const notes = [523.25, 659.25];
+    notes.forEach((freq, i) => {
+        const osc = _ac.createOscillator();
+        const gain = _ac.createGain();
+        osc.connect(gain);
+        gain.connect(_ac.destination);
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        const t = _ac.currentTime + i * 0.12;
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(0.25, t + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+        osc.start(t);
+        osc.stop(t + 0.22);
+    });
+}
+
+function playWrongSound() {
+    // 低频下降：E3 → C3，沉闷失败感
+    const osc = _ac.createOscillator();
+    const gain = _ac.createGain();
+    osc.connect(gain);
+    gain.connect(_ac.destination);
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(330, _ac.currentTime);
+    osc.frequency.linearRampToValueAtTime(180, _ac.currentTime + 0.25);
+    gain.gain.setValueAtTime(0, _ac.currentTime);
+    gain.gain.linearRampToValueAtTime(0.18, _ac.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.001, _ac.currentTime + 0.28);
+    osc.start(_ac.currentTime);
+    osc.stop(_ac.currentTime + 0.28);
+}
+
+// ---- TTS 发音（英→中模式下显示发音按钮）----
+
+// 方式①：浏览器 Web Speech API（离线可用）
+function speakWordLocal(word) {
+    if (!word) return;
+    if (!('speechSynthesis' in window)) {
+        alert('当前浏览器不支持语音合成，请使用有道发音。');
+        return;
+    }
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(word);
+    utt.lang = 'en-US';
+    utt.rate = 0.85;
+    utt.pitch = 1.0;
+    const voices = window.speechSynthesis.getVoices();
+    const enVoice = voices.find(v => v.lang.startsWith('en') && v.localService)
+        || voices.find(v => v.lang.startsWith('en'))
+        || null;
+    if (enVoice) utt.voice = enVoice;
+    window.speechSynthesis.speak(utt);
+}
+
+// 方式②：有道词典音频（在线，高质量）
+function speakWordYoudao(word, type) {
+    if (!word) return;
+    // type=0 美式发音，type=1 英式发音
+    if (type === undefined) type = 0;  // 默认美音
+    const url = `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(word)}&type=${type}`;
+    const audio = new Audio(url);
+    audio.play().catch(() => {
+        // 如有道无法访问，降级到本地 TTS
+        speakWordLocal(word);
+    });
+}
+
+// 兼容旧调用（保留 speakWord 名称）
+function speakWord(word) { speakWordLocal(word); }
+
+// 语音列表异步加载（Chrome 需要这个）
+if ('speechSynthesis' in window) {
+    window.speechSynthesis.getVoices();
+    window.speechSynthesis.addEventListener('voiceschanged', () => {
+        window.speechSynthesis.getVoices();
+    });
+}
+
+const quizType = document.getElementById('quiz-type').value;
+const ttsInEn2zh = document.getElementById('tts-in-en2zh').value === '1';
+const audio2zhEnabled = document.getElementById('audio2zh-enabled').value === '1';
+const ticketActive = document.getElementById('ticket-active').value === '1';
+const submitBtn = document.getElementById('submit-btn');
+const nextBtn = document.getElementById('next-btn');
+const resultBox = document.getElementById('result-box');
+const resultText = document.getElementById('result-text');
+const expectedText = document.getElementById('expected-text');
+const aiResponseText = document.getElementById('ai-response-text');
+const questionEl = document.getElementById('question');
+const inputArea = document.getElementById('input-area');
+const progressFill = document.getElementById('progress-fill');
+const progressText = document.getElementById('progress-text');
+const wordLabel = document.getElementById('word-label');
+
+let currentMode = '{{ mode }}';
+let pendingSwitchMode = null;  // 待确认的切换目标
+let currentWord = null;
+let finished = false;
+let waitingNext = false;
+let lastAnswerWrong = false;  // 上一次是否答错（需要advance）
+let hasStarted = false;       // 是否已开始答题（有进度）
+let autoNextTimer = null;     // 答对后自动推进的定时器
+
+// ---- 请求切换模式（有进度则弹确认） ----
+function requestSwitchMode(mode) {
+    if (finished) return;
+    if (mode === currentMode) return;
+
+    // 考试模式切换：始终需要确认（每次切换都消耗一次考试次数）
+    if (quizType === 'exam') {
+        document.getElementById('switch-modal-desc').innerHTML =
+            '切换考核方式将<strong>重新生成一份新试卷</strong>，并<strong>消耗一次考试次数</strong>。<br>确认要切换吗？';
+        pendingSwitchMode = mode;
+        document.getElementById('switch-modal').style.display = 'flex';
+        return;
+    }
+
+    // 非考试模式：有进度则弹确认
+    if (hasStarted) {
+        document.getElementById('switch-modal-desc').innerHTML =
+            '切换模式将会<strong>清空当前答题进度</strong>，从头开始。<br>确认要切换吗？';
+        pendingSwitchMode = mode;
+        document.getElementById('switch-modal').style.display = 'flex';
+    } else {
+        // 尚未开始，直接切换
+        doSwitchMode(mode);
+    }
+}
+
+function confirmSwitchMode() {
+    document.getElementById('switch-modal').style.display = 'none';
+    if (pendingSwitchMode) {
+        // 清除答对后的自动推进定时器
+        if (autoNextTimer) { clearTimeout(autoNextTimer); autoNextTimer = null; }
+        const newMode = pendingSwitchMode;
+        pendingSwitchMode = null;
+        // 通知后端重新开始
+        fetch(`/${quizType}/restart`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ mode: newMode })
+        }).then(r => r.json()).then(data => {
+            // 考试模式：检查是否次数用尽
+            if (quizType === 'exam' && data.error) {
+                alert(data.error);
+                return;
+            }
+            doSwitchMode(newMode, true);
+            // 重置页面状态
+            hasStarted = false;
+            finished = false;
+            waitingNext = false;
+            lastAnswerWrong = false;
+            resultBox.style.display = 'none';
+            submitBtn.style.display = '';
+            nextBtn.style.display = 'none';
+            document.getElementById('quiz-card').style.display = '';
+            document.getElementById('quiz-word-row').style.display = 'flex';
+            document.getElementById('audio-play-area').style.display = 'none';
+            inputArea.style.display = '';
+            document.querySelector('.mode-switcher').style.display = '';
+            progressFill.style.width = '0%';
+            progressText.textContent = '0 / 0';
+            // 从头开始出题
+            fetchNext();
+        }).catch(e => {
+            alert('切换失败，请重试');
+        });
+    }
+}
+
+function cancelSwitchMode() {
+    document.getElementById('switch-modal').style.display = 'none';
+    pendingSwitchMode = null;
+}
+
+function doSwitchMode(mode, skipRender) {
+    currentMode = mode;
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+    const btn = document.getElementById('btn-' + mode);
+    if (btn) btn.classList.add('active');
+    if (!skipRender && currentWord) renderQuestion();
+}
+
+// ---- 渲染题目 ----
+function renderQuestion() {
+    resultBox.style.display = 'none';
+    submitBtn.style.display = '';
+    nextBtn.style.display = 'none';
+    waitingNext = false;
+    lastAnswerWrong = false;
+    // 免错券按钮：只在免错券上架时才显示
+    document.getElementById('ticket-btn').style.display = 'none';
+    // 清除AI响应
+    aiResponseText.style.display = 'none';
+    const wordRow = document.getElementById('quiz-word-row');
+    const audioPlayArea = document.getElementById('audio-play-area');
+
+    if (currentMode === 'en2zh') {
+        wordLabel.textContent = '英文单词';
+        questionEl.textContent = currentWord.word;
+        wordRow.style.display = 'flex';
+        audioPlayArea.style.display = 'none';
+        // 英译汉发音：根据管理员开关决定是否显示发音按钮
+        document.getElementById('speak-btn').style.display = ttsInEn2zh ? 'flex' : 'none';
+        renderEn2zhInput();
+    } else if (currentMode === 'audio2zh') {
+        wordLabel.textContent = '听发音写中文';
+        // 音译汉：隐藏单词文字，显示大发音按钮
+        wordRow.style.display = 'none';
+        audioPlayArea.style.display = 'block';
+        document.getElementById('speak-btn').style.display = 'none';
+        renderEn2zhInput();  // 输入方式同英译汉
+    } else {
+        wordLabel.textContent = '中文释义';
+        questionEl.textContent = currentWord.meaning;
+        wordRow.style.display = 'flex';
+        audioPlayArea.style.display = 'none';
+        // 中→英模式隐藏发音按钮
+        document.getElementById('speak-btn').style.display = 'none';
+        renderZh2enInput(currentWord.word);
+    }
+}
+
+function renderEn2zhInput() {
+    inputArea.innerHTML = `
+        <input type="text" id="answer-input" class="answer-input" 
+               placeholder="输入中文意思..." autocomplete="off" autofocus>
+    `;
+    const inp = document.getElementById('answer-input');
+    inp.focus();
+    inp.addEventListener('keydown', e => {
+        if (e.key === 'Enter') submitAnswer();
+    });
+}
+
+function renderZh2enInput(word) {
+    inputArea.innerHTML = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'letter-boxes';
+
+    for (let i = 0; i < word.length; i++) {
+        const box = document.createElement('input');
+        box.type = 'text';
+        box.maxLength = 1;
+        box.className = 'letter-box';
+        box.dataset.idx = i;
+        box.autocomplete = 'off';
+        box.autocorrect = 'off';
+        box.autocapitalize = 'off';
+        box.spellcheck = false;
+
+        box.addEventListener('input', (e) => {
+            const val = e.target.value;
+            if (val && !/^[a-zA-Z]$/.test(val)) {
+                e.target.value = '';
+                return;
+            }
+            if (val) {
+                const next = wrap.querySelector(`[data-idx="${i+1}"]`);
+                if (next) next.focus();
+            }
+        });
+
+        box.addEventListener('keydown', (e) => {
+            if (e.key === 'Backspace' && e.target.value === '') {
+                const prev = wrap.querySelector(`[data-idx="${i-1}"]`);
+                if (prev) { prev.value = ''; prev.focus(); }
+            }
+            if (e.key === 'Enter') submitAnswer();
+            if (e.key === 'ArrowLeft') {
+                const prev = wrap.querySelector(`[data-idx="${i-1}"]`);
+                if (prev) prev.focus();
+            }
+            if (e.key === 'ArrowRight') {
+                const next = wrap.querySelector(`[data-idx="${i+1}"]`);
+                if (next) next.focus();
+            }
+        });
+
+        wrap.appendChild(box);
+    }
+
+    inputArea.appendChild(wrap);
+    const first = wrap.querySelector('[data-idx="0"]');
+    if (first) first.focus();
+}
+
+// ---- 获取答案 ----
+function getAnswer() {
+    if (currentMode === 'en2zh' || currentMode === 'audio2zh') {
+        return document.getElementById('answer-input')?.value || '';
+    } else {
+        return Array.from(document.querySelectorAll('.letter-box')).map(b => b.value).join('');
+    }
+}
+
+// ---- 提交答案 ----
+async function submitAnswer() {
+    if (finished || waitingNext) return;
+    const answer = getAnswer().trim();
+    if (!answer) {
+        showShake();
+        return;
+    }
+
+    submitBtn.disabled = true;
+    const url = `/${quizType}/submit`;
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ mode: currentMode, answer: answer })
+    });
+    const data = await res.json();
+    submitBtn.disabled = false;
+
+    resultBox.style.display = 'block';
+    waitingNext = true;
+    submitBtn.style.display = 'none';
+    nextBtn.style.display = '';
+
+    if (data.correct) {
+        resultBox.className = 'result-box result-correct';
+        resultText.innerHTML = `<span class="result-icon">✓</span> ${data.message}`;
+        expectedText.textContent = '';
+        // 显示AI返回信息（如有）
+        if (data.method === 'ai' && data.ai_response) {
+            aiResponseText.style.display = '';
+            aiResponseText.innerHTML = `<strong>🤖 AI判定：</strong>${escapeHtml(data.ai_response)}`;
+        } else {
+            aiResponseText.style.display = 'none';
+        }
+        lastAnswerWrong = false;
+        document.getElementById('ticket-btn').style.display = 'none';
+        playCorrectSound();
+        // 答对：自动1.2秒后推进
+        autoNextTimer = setTimeout(() => fetchNext(), 1200);
+    } else {
+        resultBox.className = 'result-box result-wrong';
+        resultText.innerHTML = `<span class="result-icon">✗</span> ${data.message}`;
+        expectedText.innerHTML = `正确答案：<strong>${data.expected}</strong>`;
+        // 显示AI返回信息（如有）
+        if (data.method === 'ai' && data.ai_response) {
+            aiResponseText.style.display = '';
+            aiResponseText.innerHTML = `<strong>🤖 AI原始返回：</strong>${escapeHtml(data.ai_response)}`;
+        } else {
+            aiResponseText.style.display = 'none';
+        }
+        lastAnswerWrong = true;  // 标记需要 advance
+        // 免错券按钮：只有在免错券上架时才显示
+        document.getElementById('ticket-btn').style.display = ticketActive ? '' : 'none';
+        playWrongSound();
+    }
+}
+
+// ---- 点击"下一个"按钮 ----
+async function handleNext() {
+    if (finished) return;
+    // 清除可能存在的自动推进定时器（防止重复推进）
+    if (autoNextTimer) { clearTimeout(autoNextTimer); autoNextTimer = null; }
+    document.getElementById('ticket-btn').style.display = 'none';
+    if (lastAnswerWrong) {
+        // 答错时先通知后端推进
+        await fetch(`/${quizType}/advance`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'}
+        });
+        lastAnswerWrong = false;
+    }
+    fetchNext();
+}
+
+// ---- 获取下一题 ----
+async function fetchNext() {
+    if (finished) return;
+    const res = await fetch(`/${quizType}/next`);
+    const data = await res.json();
+
+    if (data.finished) {
+        finished = true;
+        showFinish(data);
+        return;
+    }
+
+    hasStarted = true;
+    currentWord = data.word;
+    const pct = Math.round(data.index / data.total * 100);
+    progressFill.style.width = pct + '%';
+    progressText.textContent = `${data.index} / ${data.total}`;
+    renderQuestion();
+}
+
+// ---- 完成界面 ----
+function showFinish(data) {
+    document.getElementById('quiz-card').style.display = 'none';
+    inputArea.style.display = 'none';
+    resultBox.style.display = 'none';
+    submitBtn.style.display = 'none';
+    nextBtn.style.display = 'none';
+    document.querySelector('.mode-switcher').style.display = 'none';
+    document.getElementById('audio-play-area').style.display = 'none';
+
+    const panel = document.getElementById('finish-panel');
+    panel.style.display = 'block';
+
+    const pct = data.percent ?? 0;
+    const passed = data.passed ?? (pct >= 80);
+    document.getElementById('finish-icon').textContent = passed ? '🎉' : '💪';
+    document.getElementById('finish-title').textContent = passed ? '太棒了！' : '继续加油！';
+    document.getElementById('stat-correct').textContent = data.correct ?? '-';
+    document.getElementById('stat-total').textContent = data.total ?? '-';
+    document.getElementById('stat-percent').textContent = pct + '%';
+
+    // 未通过时显示冷却提示
+    if (!passed && quizType === 'study') {
+        const tip = document.getElementById('cooldown-tip');
+        tip.style.display = 'block';
+        tip.innerHTML = `⏱ 未达到通过标准（80%），需等待一段时间后才能重新答题。`;
+    }
+    if (!passed && quizType === 'review') {
+        const tip = document.getElementById('cooldown-tip');
+        tip.style.display = 'block';
+        const wrongCount = data.wrong_count || 0;
+        const remaining = data.remaining_review || 0;
+        tip.innerHTML = `⏱ 复习未通过，需等待冷却后才能再次复习。` +
+            (wrongCount > 0 ? `<br>📌 本轮答错 <strong>${wrongCount}</strong> 个单词，已重新加入待复习池。` : '') +
+            (remaining > 0 ? `<br>📚 当前仍有 <strong>${remaining}</strong> 个单词待复习。` : '');
+    }
+    if (!passed && quizType === 'exam') {
+        const tip = document.getElementById('cooldown-tip');
+        tip.style.display = 'block';
+        const passRate = document.getElementById('exam-pass-rate').value || 80;
+        tip.innerHTML = `💪 考试未通过（需≥${passRate}%），可返回考试列表重新参加。`;
+    }
+    if (passed && quizType === 'review') {
+        const remaining = data.remaining_review || 0;
+        if (remaining > 0) {
+            const tip = document.getElementById('cooldown-tip');
+            tip.style.display = 'block';
+            tip.innerHTML = `✅ 本轮复习通过！仍有 <strong>${remaining}</strong> 个单词待下次复习。`;
+        }
+    }
+
+    // 金币奖励提示
+    if (data.coin_grant) {
+        const cg = data.coin_grant;
+        const cgEl = document.getElementById('coin-grant-tip');
+        cgEl.style.display = 'block';
+        cgEl.textContent = `🪙 ${cg.reason} 余额：${cg.new_balance} 金币`;
+    }
+
+    progressFill.style.width = '100%';
+    progressText.textContent = '完成！';
+
+    // 学习模式：把"继续学习"按钮目标改为带锚点的 URL，返回后自动定位到该词单
+    if (quizType === 'study' && data.list_name) {
+        const btnContinue = document.querySelector('.finish-actions a[href*="study"]');
+        if (btnContinue) {
+            // 用 encodeURIComponent 保证特殊字符在 hash 里安全
+            btnContinue.href = `/study#list-${encodeURIComponent(data.list_name)}`;
+        }
+    }
+}
+
+// ---- 抖动效果 ----
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+function showShake() {
+    inputArea.classList.add('shake');
+    setTimeout(() => inputArea.classList.remove('shake'), 400);
+}
+
+// ---- 免错券 ----
+async function useTicket() {
+    const r = await fetch('/coins/use_ticket', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body:'{}'});
+    const data = await r.json();
+    if (data.success) {
+        // 通知后端本题计为正确并推进
+        await fetch(`/${quizType}/ticket_override`, {method:'POST',
+            headers:{'Content-Type':'application/json'}});
+        // 隐藏免错券按钮，改为正确提示
+        document.getElementById('ticket-btn').style.display = 'none';
+        resultBox.className = 'result-box result-correct';
+        resultText.innerHTML = `<span class="result-icon">🎟️</span> 使用了免错券，本题错误不计入成绩！（剩余 ${data.remaining} 张）`;
+        expectedText.textContent = '';
+        lastAnswerWrong = false;
+        nextBtn.style.display = 'none';
+        playCorrectSound();
+        autoNextTimer = setTimeout(() => fetchNext(), 1500);
+    } else {
+        alert(data.message);
+    }
+}
+
+// 浏览器策略：首次交互后 resume AudioContext
+document.addEventListener('click', () => { if (_ac.state === 'suspended') _ac.resume(); }, { once: true });
+document.addEventListener('keydown', () => { if (_ac.state === 'suspended') _ac.resume(); }, { once: true });
+
+// ---- 启动 ----
+// 初始化模式按钮高亮
+document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+const activeBtn = document.getElementById('btn-' + currentMode);
+if (activeBtn) activeBtn.classList.add('active');
+
+fetchNext();
+</script>
+{% endblock %}

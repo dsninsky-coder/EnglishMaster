@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block title %}金币奖励{% endblock %}
+{% block content %}
+<div class="container" style="max-width:860px;margin:0 auto;padding:20px 16px;">
+
+  <!-- 顶部余额卡片 -->
+  <div class="coins-hero">
+    <div class="coins-hero-left">
+      <div class="coins-big">🪙 <span id="balance-display">{{ balance }}</span></div>
+      <div class="coins-label">当前金币余额</div>
+    </div>
+    <div class="coins-hero-right">
+      <div class="ticket-box">
+        <div class="ticket-count" id="ticket-count">{{ ticket_count }}</div>
+        <div class="ticket-label">免错券</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 每日打卡 -->
+  <div class="section-card">
+    <h2 class="section-title">📅 每日打卡</h2>
+    <div class="checkin-grid">
+
+      <!-- 每日登录 -->
+      <div class="checkin-item {% if 'login' in checkin_done %}done{% elif 'login_visited' not in checkin_done %}locked{% endif %}">
+        <div class="checkin-icon">🌟</div>
+        <div class="checkin-name">每日登录</div>
+        <div class="checkin-coins">+1 金币</div>
+        <div class="checkin-desc">每日首次登录手动领取</div>
+        {% if 'login' in checkin_done %}
+          <button class="btn btn-sm btn-success" disabled>已领取</button>
+        {% elif 'login_visited' in checkin_done %}
+          <button class="btn btn-sm btn-primary" onclick="claimLogin()">领取</button>
+          <div style="font-size:.75em;color:var(--text-muted);margin-top:5px;">若无法领取，请<a href="{{ url_for('wordmaster.logout') }}" style="color:var(--primary);">退出后重新登录</a></div>
+        {% else %}
+          <button class="btn btn-sm" disabled style="opacity:.5;">今日未登录</button>
+          <div style="font-size:.75em;color:var(--text-muted);margin-top:5px;">若按钮不可用，请<a href="{{ url_for('wordmaster.logout') }}" style="color:var(--primary);">退出后重新登录</a></div>
+        {% endif %}
+      </div>
+
+      <!-- 新背通过 -->
+      <div class="checkin-item {% if 'study' in checkin_done %}done{% endif %}">
+        <div class="checkin-icon">📖</div>
+        <div class="checkin-name">每日新背</div>
+        <div class="checkin-coins">+3 金币</div>
+        <div class="checkin-desc">新背任意一个单元并通过</div>
+        {% if 'study' in checkin_done %}
+          <button class="btn btn-sm btn-success" disabled>已领取</button>
+        {% else %}
+          <a href="{{ url_for('wordmaster.study') }}" class="btn btn-sm btn-primary">去学习</a>
+        {% endif %}
+      </div>
+
+      <!-- 复习通过 -->
+      <div class="checkin-item {% if 'review' in checkin_done %}done{% endif %}">
+        <div class="checkin-icon">🔁</div>
+        <div class="checkin-name">每日复习</div>
+        <div class="checkin-coins">+5 金币</div>
+        <div class="checkin-desc">完成当日复习任务且通过</div>
+        {% if 'review' in checkin_done %}
+          <button class="btn btn-sm btn-success" disabled>已领取</button>
+        {% else %}
+          <a href="{{ url_for('wordmaster.review') }}" class="btn btn-sm btn-primary">去复习</a>
+        {% endif %}
+      </div>
+
+    </div>
+  </div>
+
+  <!-- 快捷操作 -->
+  <div class="section-card" style="display:flex;gap:12px;flex-wrap:wrap;">
+    <a href="{{ url_for('wordmaster.shop') }}" class="quick-link">
+      <span>🛒</span> 金币商城
+    </a>
+    <a href="{{ url_for('wordmaster.wishes') }}" class="quick-link">
+      <span>✨</span> 许愿池
+    </a>
+  </div>
+
+  <!-- 金币流水 -->
+  <div class="section-card">
+    <h2 class="section-title">📒 金币流水</h2>
+    {% if ledger %}
+    <table class="ledger-table">
+      <thead>
+        <tr>
+          <th>时间</th>
+          <th>变动</th>
+          <th>余额</th>
+          <th>说明</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in ledger %}
+        <tr>
+          <td style="white-space:nowrap;color:var(--text-muted);font-size:.85em;">{{ row.time }}</td>
+          <td class="{% if row.amount > 0 %}amount-plus{% else %}amount-minus{% endif %}">
+            {% if row.amount > 0 %}+{{ row.amount }}{% else %}{{ row.amount }}{% endif %}
+          </td>
+          <td>{{ row.balance }}</td>
+          <td style="color:var(--text-muted);">{{ row.reason }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      <p>暂无金币记录，完成每日打卡获得金币吧！</p>
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+
+<!-- 弹窗提示 -->
+<div id="toast" class="toast" style="display:none;"></div>
+
+<style>
+.coins-hero {
+  display:flex;align-items:center;justify-content:space-between;
+  background:linear-gradient(135deg,#f6d365 0%,#fda085 100%);
+  border-radius:16px;padding:24px 28px;margin-bottom:20px;color:#fff;
+}
+.coins-big { font-size:2.4em;font-weight:800;line-height:1; }
+.coins-label { font-size:.95em;opacity:.9;margin-top:4px; }
+.ticket-box { text-align:center;background:rgba(255,255,255,.25);
+  border-radius:12px;padding:12px 20px; }
+.ticket-count { font-size:2em;font-weight:800; }
+.ticket-label { font-size:.85em;opacity:.9; }
+
+.section-card { background:var(--card-bg);border-radius:14px;
+  padding:20px;margin-bottom:18px;box-shadow:0 2px 8px rgba(0,0,0,.06); }
+.section-title { font-size:1.1em;font-weight:700;margin:0 0 16px;
+  color:var(--text-primary); }
+
+.checkin-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px; }
+.checkin-item { border:2px solid var(--border-color);border-radius:12px;
+  padding:16px;text-align:center;transition:.2s; }
+.checkin-item.done { border-color:#4caf50;background:rgba(76,175,80,.07); }
+.checkin-icon { font-size:1.8em;margin-bottom:6px; }
+.checkin-name { font-weight:700;font-size:1em;color:var(--text-primary); }
+.checkin-coins { color:#f5a623;font-size:.95em;font-weight:700;margin:4px 0; }
+.checkin-desc { color:var(--text-muted);font-size:.82em;margin-bottom:10px; }
+
+.quick-link { display:flex;align-items:center;gap:8px;padding:10px 18px;
+  background:var(--primary-light,#e8f0fe);border-radius:10px;
+  color:var(--primary);font-weight:600;text-decoration:none;font-size:.95em;
+  transition:.15s; }
+.quick-link:hover { background:var(--primary);color:#fff; }
+
+.ledger-table { width:100%;border-collapse:collapse;font-size:.9em; }
+.ledger-table th { text-align:left;padding:8px 10px;border-bottom:2px solid var(--border-color);
+  color:var(--text-muted);font-weight:600; }
+.ledger-table td { padding:8px 10px;border-bottom:1px solid var(--border-color); }
+.amount-plus { color:#4caf50;font-weight:700; }
+.amount-minus { color:#f44336;font-weight:700; }
+
+.toast { position:fixed;bottom:30px;left:50%;transform:translateX(-50%);
+  background:rgba(0,0,0,.8);color:#fff;padding:10px 24px;border-radius:999px;
+  font-size:.95em;z-index:9999;animation:fadeIn .2s; }
+@keyframes fadeIn { from{opacity:0;transform:translateX(-50%) translateY(10px)}
+  to{opacity:1;transform:translateX(-50%) translateY(0)} }
+</style>
+
+<script>
+function showToast(msg, ms=2500) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(t._tid);
+  t._tid = setTimeout(() => t.style.display = 'none', ms);
+}
+
+async function claimLogin() {
+  const r = await fetch('/coins/checkin_login', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body:'{}'});
+  const data = await r.json();
+  showToast(data.message);
+  if (data.success) {
+    document.getElementById('balance-display').textContent = data.new_balance;
+    setTimeout(() => location.reload(), 1500);
+  }
+}
+</script>
+{% endblock %}

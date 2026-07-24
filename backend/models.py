@@ -143,6 +143,7 @@ class ShopItem(db.Model):
     price_coins = db.Column(db.Integer, nullable=False)
     stock = db.Column(db.Integer, default=-1)               # -1 = 无限
     is_on_shelf = db.Column(db.Boolean, default=True)
+    product_type = db.Column(db.String(20), default='custom')  # custom / builtin（内置免错券）
     admin_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=utcnow)
 
@@ -166,11 +167,19 @@ class Wish(db.Model):
     student_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
     content = db.Column(db.Text, nullable=False)
     total_coins_invested = db.Column(db.Integer, default=0)
-    status = db.Column(db.String(20), default='pending')   # pending / approved / rejected / completed
+    status = db.Column(db.String(20), default='pending')   # 听说大师: pending/approved/rejected/completed
+                                                         # 单词大师: open/approved/rejected/fulfilled/archived
     admin_reply = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=utcnow)
     resolved_at = db.Column(db.DateTime, nullable=True)
     completed_at = db.Column(db.DateTime, nullable=True)
+    # ---- 单词大师许愿池扩展字段（nullable，不影响听说大师） ----
+    title = db.Column(db.Text, nullable=True)
+    desc = db.Column(db.Text, nullable=True)
+    is_public = db.Column(db.Boolean, default=True)
+    lit = db.Column(db.Boolean, default=False)             # 管理员是否已点亮
+    pledges = db.Column(db.JSON, default=list)             # [{user, coins, time}]
+    source = db.Column(db.String(10), default='listen')    # listen=听说大师 / word=单词大师
 
 
 class WishSupport(db.Model):
@@ -180,6 +189,49 @@ class WishSupport(db.Model):
     supporter_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     coins = db.Column(db.Integer, nullable=False)
     supported_at = db.Column(db.DateTime, default=utcnow)
+
+
+# ============================================================
+# 单词大师（WordMaster）独立数据表
+# 说明：单词大师的「单词库 / 用户学习历史 / 考试配置」与听说大师完全独立；
+#       账号 / 金币 / 商店 / 许愿池 复用上方共享表（users / coin_transactions 等）。
+# ============================================================
+class WordList(db.Model):
+    """单词词单（全局共享的单词库，按 list 名分组）。"""
+    __tablename__ = 'word_lists'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), unique=True, nullable=False, index=True)
+    order_index = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=utcnow)
+
+
+class Word(db.Model):
+    """单词条目（word=英文, meaning=中文释义）。"""
+    __tablename__ = 'words'
+    id = db.Column(db.Integer, primary_key=True)
+    list_id = db.Column(db.Integer, db.ForeignKey('word_lists.id'), nullable=False, index=True)
+    word = db.Column(db.Text, nullable=False)
+    meaning = db.Column(db.Text, nullable=False)
+    order_index = db.Column(db.Integer, default=0)
+
+
+class WordUserState(db.Model):
+    """单词大师用户学习状态（整体镜像原 history JSON）。
+
+    data 结构（与原 words/data_manager 的 history 文件一致）：
+    { learned_lists, word_reviews, quiz_results, daily_stats, user_prefs,
+      list_cooldowns, review_once_cleared_date, exam_attempts, no_wrong_tickets }
+    """
+    __tablename__ = 'word_user_states'
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), primary_key=True)
+    data = db.Column(db.JSON, default=dict)
+
+
+class WordExamConfig(db.Model):
+    """单词大师考试配置（每用户 5 个槽位，整体存 JSON）。"""
+    __tablename__ = 'word_exam_configs'
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), primary_key=True)
+    data = db.Column(db.JSON, default=list)   # 长度 5 的列表，None 表示空槽位
 
 
 class SystemSetting(db.Model):

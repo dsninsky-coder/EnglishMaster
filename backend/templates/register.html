@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>注册 - 单词大师</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="auth-page">
+<div class="auth-container">
+    <div class="auth-card">
+        <div class="auth-logo">📚</div>
+        <h1 class="auth-title">创建账号</h1>
+        <p class="auth-subtitle">注册后开始你的单词学习之旅</p>
+
+        {% if error %}
+        <div class="alert alert-error">{{ error }}</div>
+        {% endif %}
+
+        <form method="post" class="auth-form">
+            <div class="form-group">
+                <label for="username">用户名</label>
+                <input type="text" id="username" name="username" required placeholder="至少2个字符" autocomplete="username">
+            </div>
+            <div class="form-group">
+                <label for="password">密码</label>
+                <input type="password" id="password" name="password" required placeholder="至少4个字符" autocomplete="new-password">
+            </div>
+            <div class="form-group">
+                <label for="confirm">确认密码</label>
+                <input type="password" id="confirm" name="confirm" required placeholder="再次输入密码" autocomplete="new-password">
+            </div>
+            <button type="submit" class="btn btn-primary btn-full">注 册</button>
+        </form>
+
+        <div class="auth-footer">
+            已有账号？<a href="{{ url_for('wordmaster.login') }}">立即登录</a>
+            <span style="margin:0 8px;color:var(--gray-500)">·</span>
+            <a href="/">返回英语大师</a>
+        </div>
+    </div>
+</div>
+</body>
+</html>

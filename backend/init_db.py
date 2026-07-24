@@ -84,6 +84,31 @@ def migrate():
             db.session.execute(text("ALTER TABLE wishes ADD COLUMN completed_at DATETIME"))
             db.session.commit()
             print('已为 wishes 增加 completed_at 列。')
+        # shop_items: 增加 product_type（custom / builtin 内置免错券）
+        scols = [r[1] for r in db.session.execute(text("PRAGMA table_info(shop_items)")).fetchall()]
+        if 'product_type' not in scols:
+            db.session.execute(text("ALTER TABLE shop_items ADD COLUMN product_type VARCHAR(20) DEFAULT 'custom'"))
+            db.session.commit()
+            print('已为 shop_items 增加 product_type 列。')
+        # wishes: 增加单词大师扩展字段（title/desc/is_public/lit/pledges/source）
+        for col, ctype in [
+            ('title', 'TEXT'), ('desc', 'TEXT'),
+            ('is_public', 'BOOLEAN'), ('lit', 'BOOLEAN'),
+            ('pledges', 'JSON'), ('source', 'VARCHAR(10)'),
+        ]:
+            if col not in wcols:
+                db.session.execute(text(f"ALTER TABLE wishes ADD COLUMN {col} {ctype}"))
+                db.session.commit()
+                print(f'已为 wishes 增加 {col} 列。')
+        # 种子：内置免错券商品（单词大师与奖励中心共享）
+        from models import ShopItem
+        if ShopItem.query.filter_by(product_type='builtin').count() == 0:
+            db.session.add(ShopItem(
+                name='免错机会券',
+                description='答题（新背/复习/考试）答错时可消耗此券抵消本次错误，不计入成绩',
+                price_coins=2, stock=-1, is_on_shelf=True, product_type='builtin'))
+            db.session.commit()
+            print('已种子内置免错券商品。')
         # 默认系统配置（签到/金币）
         defaults = {
             'checkin_coin': 1,            # 每日签到金币
@@ -116,6 +141,29 @@ def migrate():
             db.session.execute(text("ALTER TABLE users ADD COLUMN allow_skip BOOLEAN DEFAULT 0"))
             db.session.commit()
             print('已为 users 增加 allow_skip 列。')
+        # 单词大师默认配置（存 SystemSetting）
+        wm_defaults = {
+            'wm_admin_config': {
+                'shared_base_url': 'https://api.deepseek.com/v1',
+                'shared_ai_model': 'deepseek-chat',
+                'retry_cooldown_seconds': 60,
+                'tts_in_en2zh': False,
+                'audio2zh_enabled': True,
+                'judge_mode': 'local_then_ai',
+                'controlled_users': {},
+            },
+            'wm_config': {
+                'review_count': 20,
+                'review_mode': 'none',
+                'require_both_modes': False,
+            },
+        }
+        for k, v in wm_defaults.items():
+            if SystemSetting.query.get(k) is None:
+                db.session.add(SystemSetting(key=k, value=json.dumps(v)))
+        db.session.commit()
+        print('已初始化单词大师配置。')
+        # db.create_all() 已建单词大师新表（word_lists / words / word_user_states / word_exam_configs）
 
 
 def seed_demo():

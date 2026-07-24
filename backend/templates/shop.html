@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% block title %}金币商城{% endblock %}
+{% block content %}
+<div class="container" style="max-width:900px;margin:0 auto;padding:20px 16px;">
+
+  <!-- 顶部余额栏 -->
+  <div class="shop-topbar">
+    <div>
+      <span class="shop-balance">🪙 <span id="balance-display">{{ balance }}</span> 金币</span>
+      <span class="shop-tickets" style="margin-left:18px;">🎟️ 免错券 × <span id="ticket-count">{{ ticket_count }}</span></span>
+    </div>
+    <a href="{{ url_for('wordmaster.coins') }}" class="btn btn-sm">← 金币中心</a>
+  </div>
+
+  <!-- 商品列表 -->
+  <div class="section-card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+      <h2 class="section-title" style="margin:0;">🛒 商品货架 <span style="font-size:.75em;font-weight:400;color:var(--text-muted);">（余额不足的商品无法购买）</span></h2>
+      <button class="btn btn-sm" onclick="location.reload()" title="刷新商品列表">🔄 刷新</button>
+    </div>
+    <div class="products-grid">
+      {% for p in products %}
+      {% set can_afford = (balance >= p.price) %}
+      <div class="product-card {% if not can_afford %}product-card-disabled{% endif %}" id="prod-{{ p.id }}">
+        <div class="prod-icon">{% if p.id == 'no_wrong_ticket' %}🎟️{% else %}🎁{% endif %}</div>
+        <div class="prod-name">{{ p.name }}</div>
+        <div class="prod-desc">{{ p.desc }}</div>
+        <div class="prod-price {% if not can_afford %}prod-price-disabled{% endif %}">🪙 {{ p.price }} 金币</div>
+        <button class="btn prod-buy-btn {% if can_afford %}btn-primary{% else %}btn-disabled{% endif %}"
+                onclick="buyProduct('{{ p.id|e }}','{{ p.name|e }}',{{ p.price }})"
+                {% if not can_afford %}disabled{% endif %}>
+          {% if can_afford %}购买{% else %}金币不足{% endif %}
+        </button>
+      </div>
+      {% else %}
+      <div class="empty-state"><p>商城暂无商品，管理员正在备货中...</p></div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- 我的订单 -->
+  <div class="section-card">
+    <h2 class="section-title">📦 我的订单</h2>
+    {% if my_orders %}
+    <table class="ledger-table">
+      <thead>
+        <tr>
+          <th>商品</th>
+          <th>金币</th>
+          <th>状态</th>
+          <th>下单时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for o in my_orders %}
+        <tr id="order-row-{{ o.id }}">
+          <td>{{ o.product_name }}</td>
+          <td>{{ o.price }}</td>
+          <td>
+            {% if o.status == 'pending' %}
+              <span class="badge badge-warn">待发货</span>
+            {% elif o.status == 'shipped' %}
+              <span class="badge badge-info">已发货</span>
+            {% else %}
+              <span class="badge badge-success">已完成</span>
+            {% endif %}
+          </td>
+          <td style="font-size:.85em;color:var(--text-muted);">{{ o.created_at[:10] }}</td>
+          <td>
+            {% if o.status == 'shipped' %}
+            <button class="btn btn-sm btn-success"
+                    onclick="confirmReceipt('{{ o.id }}')">确认收货</button>
+            {% else %}
+              —
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state"><p>暂无订单记录</p></div>
+    {% endif %}
+  </div>
+
+</div>
+
+<!-- 确认购买弹窗 -->
+<div id="buy-modal" class="shop-modal-overlay" style="display:none;">
+  <div class="shop-modal-box">
+    <h3 id="buy-modal-title">确认购买</h3>
+    <p id="buy-modal-body" style="margin:14px 0;color:var(--text-muted);"></p>
+    <!-- 错误提示区 -->
+    <div id="buy-error" style="display:none;background:#fff3cd;color:#856404;
+         border:1px solid #ffeeba;border-radius:8px;padding:10px 14px;
+         margin-bottom:12px;font-size:.9em;"></div>
+    <div style="display:flex;gap:12px;justify-content:flex-end;">
+      <button class="btn" onclick="closeBuyModal()">取消</button>
+      <button class="btn btn-primary" id="buy-confirm-btn" onclick="doBuy()">确认购买</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast" style="display:none;"></div>
+
+<style>
+.shop-topbar { display:flex;align-items:center;justify-content:space-between;
+  background:var(--card-bg);border-radius:12px;padding:14px 20px;
+  margin-bottom:18px;box-shadow:0 2px 8px rgba(0,0,0,.06); }
+.shop-balance { font-size:1.15em;font-weight:700;color:#f5a623; }
+.shop-tickets { font-size:1em;font-weight:600;color:var(--text-primary); }
+
+.section-card { background:var(--card-bg);border-radius:14px;padding:20px;
+  margin-bottom:18px;box-shadow:0 2px 8px rgba(0,0,0,.06); }
+.section-title { font-size:1.1em;font-weight:700;margin:0 0 16px;color:var(--text-primary); }
+
+.products-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px; }
+.product-card { border:2px solid var(--border-color);border-radius:12px;
+  padding:18px;text-align:center;transition:.2s; }
+.product-card:hover { border-color:var(--primary);box-shadow:0 4px 16px rgba(66,133,244,.12); }
+/* 余额不足时卡片整体灰显 */
+.product-card-disabled { opacity:.55; border-color:var(--border-color); }
+.product-card-disabled:hover { box-shadow:none; }
+.prod-icon { font-size:2em;margin-bottom:8px; }
+.prod-name { font-weight:700;font-size:1em;color:var(--text-primary); }
+.prod-desc { color:var(--text-muted);font-size:.82em;margin:6px 0 8px;min-height:36px; }
+.prod-price { color:#f5a623;font-weight:700;font-size:1em;margin-bottom:12px; }
+.prod-price-disabled { color:#999; }
+.prod-buy-btn { width:100%; }
+/* 禁用按钮样式 */
+.btn-disabled { background:#e0e0e0;color:#999;border:1px solid #ccc;cursor:not-allowed; }
+.btn-disabled:hover { background:#e0e0e0;color:#999;border:1px solid #ccc; }
+
+.ledger-table { width:100%;border-collapse:collapse;font-size:.9em; }
+.ledger-table th { text-align:left;padding:8px 10px;border-bottom:2px solid var(--border-color);
+  color:var(--text-muted);font-weight:600; }
+.ledger-table td { padding:8px 10px;border-bottom:1px solid var(--border-color); }
+
+.badge { display:inline-block;padding:2px 10px;border-radius:999px;font-size:.8em;font-weight:600; }
+.badge-warn { background:#fff3cd;color:#856404; }
+.badge-info { background:#d1ecf1;color:#0c5460; }
+.badge-success { background:#d4edda;color:#155724; }
+
+.shop-modal-overlay { position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:2000;
+  display:flex;align-items:center;justify-content:center; }
+.shop-modal-box { background:var(--card-bg,#fff);border-radius:16px;padding:28px 24px;
+  width:90%;max-width:380px;box-shadow:0 8px 32px rgba(0,0,0,.22); }
+
+.toast { position:fixed;bottom:30px;left:50%;transform:translateX(-50%);
+  background:rgba(0,0,0,.85);color:#fff;padding:12px 28px;border-radius:999px;
+  font-size:.95em;z-index:9999;white-space:nowrap;max-width:90vw;overflow:hidden;text-overflow:ellipsis; }
+</style>
+
+<script>
+let pendingBuy = null;
+
+function showToast(msg, ms=3200) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.display = 'block';
+  clearTimeout(t._tid);
+  t._tid = setTimeout(() => t.style.display = 'none', ms);
+}
+
+function buyProduct(pid, name, price) {
+  const bal = parseInt(document.getElementById('balance-display').textContent);
+  if (bal < price) {
+    // 再次校验（兜底）
+    showToast('⚠️ 金币不足！当前 ' + bal + ' 个，需要 ' + price + ' 个');
+    return;
+  }
+  pendingBuy = {pid, name, price};
+  document.getElementById('buy-modal-title').textContent = '确认购买：' + name;
+  document.getElementById('buy-modal-body').textContent =
+    '将消耗 ' + price + ' 枚金币，当前余额 ' + bal + ' 枚。确认购买吗？';
+  document.getElementById('buy-error').style.display = 'none';
+  document.getElementById('buy-confirm-btn').disabled = false;
+  document.getElementById('buy-confirm-btn').textContent = '确认购买';
+  document.getElementById('buy-modal').style.display = 'flex';
+}
+
+function closeBuyModal() {
+  document.getElementById('buy-modal').style.display = 'none';
+  document.getElementById('buy-error').style.display = 'none';
+  pendingBuy = null;
+}
+
+async function doBuy() {
+  if (!pendingBuy) return;
+  const errEl = document.getElementById('buy-error');
+  const confirmBtn = document.getElementById('buy-confirm-btn');
+
+  // 服务端余额再校验（双重保险）
+  errEl.style.display = 'none';
+  confirmBtn.disabled = true;
+  confirmBtn.textContent = '处理中...';
+
+  try {
+    const r = await fetch('/shop/buy', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({product_id: pendingBuy.pid})
+    });
+    const data = await r.json();
+
+    if (!data.success) {
+      // 余额不足等错误——显示醒目错误提示
+      errEl.textContent = '⚠️ ' + data.message;
+      errEl.style.display = 'block';
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = '确认购买';
+      // 如果是余额不足，立即刷新余额显示
+      if (data.message.includes('不足') || data.message.includes('金币')) {
+        setTimeout(() => location.reload(), 2000);
+      }
+    } else {
+      // 成功
+      closeBuyModal();
+      showToast('✅ ' + data.message);
+      document.getElementById('balance-display').textContent = data.new_balance;
+      if (data.builtin) {
+        const tc = document.getElementById('ticket-count');
+        if (tc) tc.textContent = parseInt(tc.textContent) + 1;
+      }
+      setTimeout(() => location.reload(), 2000);
+    }
+  } catch(e) {
+    errEl.textContent = '⚠️ 网络错误，请重试';
+    errEl.style.display = 'block';
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = '确认购买';
+  }
+}
+
+async function confirmReceipt(oid) {
+  if (!confirm('确认已收到商品吗？')) return;
+  const r = await fetch('/shop/confirm_receipt', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({order_id: oid})
+  });
+  const data = await r.json();
+  showToast(data.message);
+  if (data.success) setTimeout(() => location.reload(), 1500);
+}
+</script>
+{% endblock %}
