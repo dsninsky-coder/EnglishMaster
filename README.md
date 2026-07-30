@@ -11,7 +11,7 @@
 | 后端 | Python Flask + Flask-JWT-Extended（标准 `templates/` + `static/` 布局） |
 | ORM | SQLAlchemy 2.x |
 | 数据库 | SQLite（单文件 `backend/instance/english.db`） |
-| AI | 仅 DeepSeek (`https://api.deepseek.com/v1`) |
+| AI | 可配置（默认 DeepSeek，兼容任意 OpenAI Chat Completions 接口的模型） |
 
 > 前端为纯静态资源，由 Flask 直接以 `/static/` 托管、`render_template` 渲染 `templates/index.html`，**无需 npm / 打包 / 构建**，改完 JS 刷新浏览器即生效。
 
@@ -146,3 +146,18 @@ python app.py                # 监听 http://localhost:5000
 2. 学生端登录 → 每日签到 → 进入课程按 Step 1→5 闯关。
 3. （可选）在「设置 API Key」填入 DeepSeek Key 后，本地判分不通过时由 AI 按完整度+准确度二次打分，更精准。
 4. 商店上架商品、发布愿望并互相助力、查看报表。
+
+## 版本历史
+
+### v0.3（当前）
+- **AI 模型可配置**：管理员在「系统工具 → API 分享」页新增「🤖 AI 模型设置」，可填写 API Base URL 与模型名称（如 `gpt-4o-mini`、`deepseek-chat`、通义、本地 vLLM 等）。设置后**听说大师与单词大师的 AI 判分统一生效**，兼容任意 OpenAI Chat Completions 接口的模型，方便后期切换。
+- **管理员 PC 化布局**：管理后台改为左侧导航 + 内容区的 PC 布局（学生端移动端布局不变）。
+- **系统工具独立入口**：原听说管理里的「系统工具」移入左侧导航（学员管理下方），作为全系统级设置。
+- **课程音频扫描**：管理员可一键扫描 `uploads/courses/<课程ID>/` 文件夹，自动按文件名数字同步句子音频到数据库（双向同步、幂等）。
+- 金币 / DeepSeek API / 商店 / 许愿池在单词大师与听说大师之间**完全共享同一数据库**。
+
+### v0.2
+- 融合「单词大师」：以 Blueprint 并入主应用，统一入口「英语大师」，学生登录后可在听说大师 / 单词大师 / 奖励中心间切换；管理员四板块（听说 / 单词 / 奖励 / 学员）。
+
+### v0.1
+- 初始发布：五步法闯关式英语学习平台。

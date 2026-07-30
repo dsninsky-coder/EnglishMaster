@@ -10,25 +10,29 @@ import re
 import difflib
 import requests
 
-DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
-MODEL = "deepseek-chat"
+# 默认值保持 DeepSeek，但 base_url / model 均可由管理员在后台配置，
+# 这样任何兼容 OpenAI Chat Completions 接口的模型（DeepSeek / OpenAI / 通义 / 本地 vLLM 等）都能接入。
+DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
+DEFAULT_MODEL = "deepseek-chat"
 
 
-def _chat(key, messages, temperature=0.0):
+def _chat(key, messages, base_url=None, model=None, temperature=0.0):
     if not key:
         return None
+    base = (base_url or DEFAULT_BASE_URL).rstrip("/")
+    url = base + "/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": MODEL,
+        "model": model or DEFAULT_MODEL,
         "messages": messages,
         "temperature": temperature,
         "response_format": {"type": "json_object"},
     }
     try:
-        r = requests.post(DEEPSEEK_URL, headers=headers, json=payload, timeout=40)
+        r = requests.post(url, headers=headers, json=payload, timeout=40)
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
     except Exception:
@@ -42,7 +46,7 @@ def local_similarity(a, b):
     return round(difflib.SequenceMatcher(None, a, b).ratio(), 3)
 
 
-def score_similarity(key, user_text, reference_text):
+def score_similarity(key, user_text, reference_text, base_url=None, model=None):
     """返回 0~1 的语义相似度。"""
     if not key:
         return local_similarity(user_text, reference_text)
@@ -54,7 +58,7 @@ def score_similarity(key, user_text, reference_text):
         {"role": "user", "content": json.dumps(
             {"user": user_text, "reference": reference_text}, ensure_ascii=False)},
     ]
-    content = _chat(key, messages)
+    content = _chat(key, messages, base_url=base_url, model=model)
     if not content:
         return local_similarity(user_text, reference_text)
     try:
@@ -65,7 +69,7 @@ def score_similarity(key, user_text, reference_text):
         return local_similarity(user_text, reference_text)
 
 
-def analyze_error(key, user_input, correct_answer, step):
+def analyze_error(key, user_input, correct_answer, step, base_url=None, model=None):
     """生成简短错因（中文，≤30 字）。"""
     if not key:
         return "与标准答案有差异，请对照学习。"
@@ -79,7 +83,7 @@ def analyze_error(key, user_input, correct_answer, step):
             {"step": step_name, "student": user_input, "standard": correct_answer},
             ensure_ascii=False)},
     ]
-    content = _chat(key, messages)
+    content = _chat(key, messages, base_url=base_url, model=model)
     if not content:
         return "与标准答案有差异，请对照学习。"
     try:
@@ -160,7 +164,7 @@ def check_svo(user_text, svo):
     return all(needed) if needed else True
 
 
-def check_step5(user_text, prev_sentence_text, core_words, key):
+def check_step5(user_text, prev_sentence_text, core_words, key, base_url=None, model=None):
     """Step5 延展叙述：逻辑连贯 + 至少命中1个核心词 + 长度<=20词。"""
     if not user_text or not user_text.strip():
         return False, 0.0
@@ -168,7 +172,7 @@ def check_step5(user_text, prev_sentence_text, core_words, key):
     if len(words) > 20:
         return False, 0.0
     # 逻辑连贯：user_text 与 上文句子 的语义相似度 >= 0.5
-    sim = score_similarity(key, user_text, prev_sentence_text or "")
+    sim = score_similarity(key, user_text, prev_sentence_text or "", base_url=base_url, model=model)
     coherence = sim >= 0.5
     # 核心词召回
     hit = 0
@@ -216,8 +220,8 @@ def local_english_match(user_text, reference_english, target_words=None):
     return (passed, matched, len(core))
 
 
-def ai_score_english(key, user_text, standard_text, task='en'):
-    """用 DeepSeek 对英文作答按「完整度+准确度」打 0~1 分。无 key 返回 None。
+def ai_score_english(key, user_text, standard_text, task='en', base_url=None, model=None):
+    """用 AI 对英文作答按「完整度+准确度」打 0~1 分。无 key 返回 None。
 
     task='en'  : 中译英（与标准英文比对）
     task='cont': 延展叙述（续写是否连贯、完整、准确）
@@ -235,7 +239,7 @@ def ai_score_english(key, user_text, standard_text, task='en'):
         {"role": "user", "content": json.dumps(
             {"standard": standard_text, "student": user_text}, ensure_ascii=False)},
     ]
-    content = _chat(key, messages)
+    content = _chat(key, messages, base_url=base_url, model=model)
     if not content:
         return None
     try:
@@ -244,8 +248,8 @@ def ai_score_english(key, user_text, standard_text, task='en'):
         return None
 
 
-def ai_score_chinese(key, user_text, standard_text):
-    """用 DeepSeek 对中文翻译按「完整度+准确度」打 0~1 分。无 key 返回 None。"""
+def ai_score_chinese(key, user_text, standard_text, base_url=None, model=None):
+    """用 AI 对中文翻译按「完整度+准确度」打 0~1 分。无 key 返回 None。"""
     if not key:
         return None
     messages = [
@@ -256,7 +260,7 @@ def ai_score_chinese(key, user_text, standard_text):
         {"role": "user", "content": json.dumps(
             {"standard": standard_text, "student": user_text}, ensure_ascii=False)},
     ]
-    content = _chat(key, messages)
+    content = _chat(key, messages, base_url=base_url, model=model)
     if not content:
         return None
     try:
@@ -265,7 +269,7 @@ def ai_score_chinese(key, user_text, standard_text):
         return None
 
 
-def generate_meta(key, english, chinese):
+def generate_meta(key, english, chinese, base_url=None, model=None):
     if not key:
         return [], []
     messages = [
@@ -278,7 +282,7 @@ def generate_meta(key, english, chinese):
         {"role": "user", "content": json.dumps(
             {"english": english, "chinese": chinese}, ensure_ascii=False)},
     ]
-    content = _chat(key, messages)
+    content = _chat(key, messages, base_url=base_url, model=model)
     if not content:
         return [], []
     try:

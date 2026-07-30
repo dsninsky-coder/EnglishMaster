@@ -101,8 +101,11 @@ class WordDataManager:
 
     def load_admin_config(self):
         cfg = SystemSetting.get('wm_admin_config', {}) or {}
-        cfg.setdefault('shared_base_url', 'https://api.deepseek.com/v1')
-        cfg.setdefault('shared_ai_model', 'deepseek-chat')
+        # 统一全局 AI 代理：管理员在「系统工具 → API分享」里设置的模型，
+        # 若单词大师未单独配置 shared_base_url/shared_ai_model，则回退到全局 ai_proxy。
+        g = SystemSetting.get('ai_proxy', {}) or {}
+        cfg['shared_base_url'] = cfg.get('shared_base_url') or g.get('base_url') or 'https://api.deepseek.com/v1'
+        cfg['shared_ai_model'] = cfg.get('shared_ai_model') or g.get('ai_model') or 'deepseek-chat'
         cfg.setdefault('retry_cooldown_seconds', 60)
         cfg.setdefault('tts_in_en2zh', False)
         cfg.setdefault('audio2zh_enabled', True)

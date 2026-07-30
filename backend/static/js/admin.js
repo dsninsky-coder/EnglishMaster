@@ -7,27 +7,16 @@ function renderAdmin(tab) {
   const param = parts[2]
   let inner = ''
   // 各板块对应的父级 Tab（用于高亮）
-  const MAIN = ['courses', 'words', 'rewards', 'students']
+  const MAIN = ['courses', 'words', 'rewards', 'students', 'system']
   const parentOf = {
     coins: 'rewards', shop: 'rewards', wishes: 'rewards',
-    report: 'courses', db: 'courses', api: 'courses', account: 'courses', settings: 'courses',
+    report: 'system', db: 'system', api: 'system', account: 'system', settings: 'system',
   }
   const parentTab = MAIN.includes(tab) ? tab : (parentOf[tab] || 'courses')
 
   if (tab === 'courses') {
-    // 听说管理：课程管理 + 系统子工具
-    inner = adminCoursesInner() + `
-      <div class="card" style="margin-top:16px">
-        <h3>系统工具</h3>
-        <p class="muted" style="font-size:13px">报表、数据库、API 分享、账号与设置等系统功能（归属听说大师相关）。</p>
-        <div class="row" style="flex-wrap:wrap;gap:8px">
-          <a class="btn ghost sm" href="#/admin/report">📊 报表</a>
-          <a class="btn ghost sm" href="#/admin/db">🗄️ 数据库</a>
-          <a class="btn ghost sm" href="#/admin/api">🔑 API分享</a>
-          <a class="btn ghost sm" href="#/admin/account">👤 账号</a>
-          <a class="btn ghost sm" href="#/admin/settings">⚙️ 设置</a>
-        </div>
-      </div>`
+    // 听说管理：课程管理
+    inner = adminCoursesInner()
   }
   else if (tab === 'words') {
     // 单词管理：跳转单词大师后台（服务端页面）
@@ -52,6 +41,7 @@ function renderAdmin(tab) {
     inner = subTabs + `<div id="tab-body"><div class="empty">加载中…</div></div>`
   }
   else if (tab === 'students') inner = '<div id="tab-body"><div class="empty">加载中…</div></div>'
+  else if (tab === 'system') inner = adminSystemInner()
   else if (tab === 'coins') inner = '<div id="tab-body"><div class="empty">加载中…</div></div>'
   else if (tab === 'api') inner = '<div id="tab-body"><div class="empty">加载中…</div></div>'
   else if (tab === 'shop') inner = '<div id="tab-body"><div class="empty">加载中…</div></div>'
@@ -98,9 +88,13 @@ function adminCoursesInner() {
   <div class="card">
     <div class="spread">
       <h3>课程管理列表</h3>
-      <button class="btn" onclick="openBatchAssign()">📦 批量推送课程</button>
+      <div class="row">
+        <button class="btn" onclick="scanAllAudio()">📂 扫描全部音频</button>
+        <button class="btn" onclick="openBatchAssign()">📦 批量推送课程</button>
+      </div>
     </div>
     <p class="muted" style="font-size:13px">解析后课程即进入列表，可在此发布 / 撤销 / 分配 / 补充音频 / 检查错误 / 编辑 / 删除。一次给多名学生推送多门课程，请用右上角「批量推送」。</p>
+    <p class="hint">📂 <b>批量上传音频</b>：直接用服务器远程文件管理把 mp3 传到 <code>backend/uploads/courses/&lt;课程ID&gt;/</code> 文件夹（文件名数字=句子序号，如 <code>1.mp3</code>），然后点列表里的「🔄 扫描」或上方「📂 扫描全部音频」即可自动入库，无需逐个上传。</p>
     <div id="courseList"><div class="empty">加载中…</div></div>
   </div>`
 }
@@ -218,6 +212,7 @@ async function loadCourseList() {
             : `<button class="btn ok sm" onclick="publishCourse(${c.id})">发布</button>`}
           <button class="btn ghost sm" onclick="openAssign(${c.id})">分配</button>
           <button class="btn ghost sm" onclick="openAudioUpload(${c.id})">补充音频</button>
+          <button class="btn sm" onclick="scanCourseAudio(${c.id})">🔄 扫描</button>
           <button class="btn ghost sm" onclick="openCheckErrors(${c.id})">检查错误</button>
           <button class="btn ghost sm" onclick="openEditCourse(${c.id})">编辑</button>
           <button class="btn danger sm" onclick="deleteCourse(${c.id}, '${esc(c.title)}')">删除</button>
@@ -260,6 +255,30 @@ async function submitAudioUpload(courseId) {
   if (!res.ok) { el('audioStatus').textContent = '失败：' + (d.error || ''); return }
   const lines = (d.results || []).map(x => `${x.file}: ${x.status === 'ok' ? '✅' + (x.url || '') : '⚠️' + (x.reason || '')}`).join('<br/>')
   el('audioStatus').innerHTML = `完成：${esc(d.message)}<br/>${lines}`
+  loadCourseList()
+}
+function _scanReportHtml(d) {
+  const rows = (d.report || []).map(x => {
+    const parts = [`#${x.course_id} ${esc(x.title)}`, `磁盘${x.disk_files}个`, `更新${x.updated_count}`, `清理${x.cleared_count}`]
+    if (x.orphan_count) parts.push(`<span style="color:var(--warn)">${x.orphan_count}个未匹配(${x.orphan_files.join(',')})</span>`)
+    return `<div>· ${parts.join(' / ')}</div>`
+  })
+  return `<h3>音频扫描结果</h3>
+    <p class="muted">${esc(d.message)}</p>
+    <div style="font-size:13px;line-height:1.7">${rows.join('') || '<div class="empty">无课程</div>'}</div>`
+}
+async function scanCourseAudio(courseId) {
+  if (!confirm(`扫描课程 #${courseId} 的音频文件夹并自动同步数据库？\n（文件名数字=句子序号；磁盘有但库未指向的会自动补全；库指向但磁盘已删除的会清理）`)) return
+  const r = await api('/admin/scan-audio', 'POST', { course_id: courseId })
+  if (!r.ok) { toast(r.data.error || '扫描失败', true); return }
+  modal(_scanReportHtml(r.data) + `<div class="row" style="margin-top:10px"><button class="btn" onclick="closeModal()">关闭</button></div>`)
+  loadCourseList()
+}
+async function scanAllAudio() {
+  if (!confirm('扫描【全部课程】的音频文件夹并自动同步数据库？\n这会根据各课程 uploads 文件夹自动更新 audio_url，可能需要一点时间。')) return
+  const r = await api('/admin/scan-audio', 'POST', {})
+  if (!r.ok) { toast(r.data.error || '扫描失败', true); return }
+  modal(_scanReportHtml(r.data) + `<div class="row" style="margin-top:10px"><button class="btn" onclick="closeModal()">关闭</button></div>`)
   loadCourseList()
 }
 async function openCheckErrors(courseId) {
@@ -406,7 +425,31 @@ async function loadApiTab() {
     ${keys.length ? keys.map(k => `<div class="tag">#${k.id} ${k.masked} ${k.is_active ? '✅' : '⏸'}</div>`).join('') : '<div class="muted">还没有</div>'}
   </div>
   <h3>为学员指定共享 Key</h3>
-  ${shareRows || '<div class="empty">暂无学生</div>'}`
+  ${shareRows || '<div class="empty">暂无学生</div>'}
+  <div class="card" style="margin-top:16px">
+    <h3>🤖 AI 模型设置（全系统生效）</h3>
+    <p class="hint">设置后，听说大师与单词大师的 AI 判分都会使用此模型。只要兼容 OpenAI Chat Completions 接口的模型均可（DeepSeek / OpenAI / 通义 / 本地 vLLM 等）。</p>
+    <label style="display:block;margin-bottom:6px">API Base URL</label>
+    <input id="aiBaseUrl" placeholder="https://api.deepseek.com/v1" style="margin-bottom:10px" />
+    <label style="display:block;margin-bottom:6px">模型名称</label>
+    <input id="aiModel" placeholder="deepseek-chat" style="margin-bottom:10px" />
+    <button class="btn block" onclick="saveAiProxy()">保存 AI 模型设置</button>
+  </div>`
+  loadAiProxy()
+}
+async function loadAiProxy() {
+  const r = await api('/admin/ai-proxy')
+  if (!r.ok) return
+  const b = el('aiBaseUrl'), m = el('aiModel')
+  if (b && r.data.base_url) b.value = r.data.base_url
+  if (m && r.data.model) m.value = r.data.model
+}
+async function saveAiProxy() {
+  const b = el('aiBaseUrl'), m = el('aiModel')
+  if (!b || !m) return
+  const r = await api('/admin/ai-proxy', 'POST', { base_url: b.value.trim(), model: m.value.trim() })
+  if (!r.ok) { toast(r.data.error || '保存失败', true); return }
+  toast(`已保存：${r.data.model} @ ${r.data.base_url}`)
 }
 async function addShareKey() {
   const v = el('newKey').value.trim()
@@ -541,6 +584,19 @@ async function processWish(id, action) {
 }
 
 /* ---------- 数据库只读 ---------- */
+function adminSystemInner() {
+  return `<div class="card">
+    <h3>系统工具</h3>
+    <p class="muted" style="font-size:13px">全系统级设置（同时作用于听说大师与单词大师），不属于任何单一板块。</p>
+    <div class="row" style="flex-wrap:wrap;gap:8px">
+      <a class="btn ghost sm" href="#/admin/report">📊 报表</a>
+      <a class="btn ghost sm" href="#/admin/db">🗄️ 数据库</a>
+      <a class="btn ghost sm" href="#/admin/api">🔑 API分享</a>
+      <a class="btn ghost sm" href="#/admin/account">👤 账号</a>
+      <a class="btn ghost sm" href="#/admin/settings">⚙️ 设置</a>
+    </div>
+  </div>`
+}
 function adminDbInner() {
   const tables = ['users', 'admin_share_keys', 'courses', 'sentences', 'course_assignments',
     'student_sentence_progress', 'wrong_answers', 'coin_transactions', 'shop_items',

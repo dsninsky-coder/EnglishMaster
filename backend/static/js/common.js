@@ -82,22 +82,35 @@ function studentFrame(inner, active) {
 }
 function adminFrame(inner, activeTab) {
   const tabs = [
-    ['courses', '听说管理'], ['words', '单词管理'],
-    ['rewards', '奖励管理'], ['students', '学员管理'],
+    ['courses', '🎧 听说管理'], ['words', '📚 单词管理'],
+    ['rewards', '🎁 奖励管理'], ['students', '👥 学员管理'],
+    ['system', '🛠️ 系统工具'],
   ]
-  const t = tabs.map(([k, l]) =>
-    `<a class="tab ${activeTab === k ? 'active' : ''}" href="#/admin/${k}">${l}</a>`).join('')
-  return `<div class="app">
-    <div class="topbar">
-      <h1>英语大师 · 管理后台</h1>
-      <div class="row">
-        <a class="btn ghost sm" href="#/">返回学生端</a>
-        <button class="btn ghost sm" onclick="openChangePassword()">改密</button>
-        <button class="btn ghost sm" onclick="doLogout()">退出</button>
+  const labels = {}
+  tabs.forEach(([k, l]) => { labels[k] = l })
+  const nav = tabs.map(([k, l]) =>
+    `<a class="admin-nav-item ${activeTab === k ? 'active' : ''}" href="#/admin/${k}">${l}</a>`).join('')
+  const u = getUser() || {}
+  return `<div class="app admin-app">
+    <aside class="admin-side">
+      <div class="admin-brand">英语大师<span>管理后台</span></div>
+      <nav class="admin-nav">${nav}</nav>
+      <div class="admin-side-foot">
+        <a class="btn ghost sm block" href="#/">返回学生端</a>
+        <button class="btn ghost sm block" onclick="openChangePassword()">修改密码</button>
+        <button class="btn ghost sm block" onclick="doLogout()">退出登录</button>
       </div>
-    </div>
-    <div class="tabs">${t}</div>
-    <div class="content">${inner}</div>
+    </aside>
+    <main class="admin-main">
+      <div class="admin-head">
+        <h2>${labels[activeTab] || '管理后台'}</h2>
+        <div class="row">
+          <span class="coin">🪙 ${u.coin_balance ?? 0}</span>
+          <span class="muted">${esc(u.username || '')}</span>
+        </div>
+      </div>
+      <div class="content admin-content">${inner}</div>
+    </main>
   </div>`
 }
 

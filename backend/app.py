@@ -51,6 +51,17 @@ def set_setting(key, value):
     SystemSetting.set(key, value)
 
 
+def get_ai_proxy():
+    """全局 AI 代理配置（听说大师判分用）。管理员可在后台设置，兼容任意 OpenAI Chat 接口。"""
+    cfg = get_setting('ai_proxy') or {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    return {
+        'base_url': (cfg.get('base_url') or '').strip() or 'https://api.deepseek.com/v1',
+        'model': (cfg.get('model') or '').strip() or 'deepseek-chat',
+    }
+
+
 def extract_json(text):
     """从可能含 markdown 栅栏/前言的文本中稳健提取 JSON（对象或数组）。
 
@@ -403,6 +414,7 @@ def step_submit():
         return jsonify(error='非法 step'), 400
     s = Sentence.query.get_or_404(sentence_id)
     key = resolve_api_key(u)
+    proxy = get_ai_proxy()
     result = {'correct': False, 'similarity': None,
               'error_type': None, 'standard_answer': None, 'proficiency': 0}
 
@@ -437,27 +449,31 @@ def step_submit():
         return jsonify(**result)
 
     if step == 2:
-        # 英译中：本地字符相似度优先；不达标再交给 DeepSeek 按完整度+准确度打分
+        # 英译中：本地字符相似度优先；不达标再交给 AI 按完整度+准确度打分
         local_sim = ds.local_similarity(user_input, s.chinese)
         if local_sim >= 0.70:
             correct = True
             sim = local_sim
             method = 'local'
         else:
-            ai = ds.ai_score_chinese(key, user_input, s.chinese)
+            ai = ds.ai_score_chinese(key, user_input, s.chinese,
+                                     base_url=proxy['base_url'], model=proxy['model'])
             sim = ai if ai is not None else local_sim
             correct = sim >= 0.75
             method = 'ai' if ai is not None else 'local'
         result.update(correct=correct, similarity=round(sim, 3),
                       standard_answer=s.chinese, method=method)
-        _apply_step_result(u, s, step, correct, user_input, s.chinese, key, result)
+        _apply_step_result(u, s, step, correct, user_input, s.chinese, key, result,
+                          base_url=proxy['base_url'], model=proxy['model'])
 
     elif step == 3:
-        sim = ds.score_similarity(key, user_input, s.chinese)
+        sim = ds.score_similarity(key, user_input, s.chinese,
+                                 base_url=proxy['base_url'], model=proxy['model'])
         correct = sim >= 0.80
         result.update(correct=correct, similarity=round(sim, 3),
                       standard_answer=s.chinese)
-        _apply_step_result(u, s, step, correct, user_input, s.chinese, key, result)
+        _apply_step_result(u, s, step, correct, user_input, s.chinese, key, result,
+                          base_url=proxy['base_url'], model=proxy['model'])
 
     elif step == 4:
         # 中译英：本地英文单词对比优先；不通过再交给 DeepSeek 按完整度+准确度打分
@@ -467,7 +483,8 @@ def step_submit():
             correct = True
             method = 'local'
         else:
-            ai = ds.ai_score_english(key, user_input, s.english, task='en')
+            ai = ds.ai_score_english(key, user_input, s.english, task='en',
+                                    base_url=proxy['base_url'], model=proxy['model'])
             if ai is None:
                 correct = False
                 method = 'local'
@@ -477,7 +494,8 @@ def step_submit():
         result.update(correct=correct, standard_answer=s.english, method=method,
                       local_match=f'{matched}/{total}',
                       similarity=(round(ai, 3) if (method == 'ai' and ai is not None) else None))
-        _apply_step_result(u, s, step, correct, user_input, s.english, key, result)
+        _apply_step_result(u, s, step, correct, user_input, s.english, key, result,
+                          base_url=proxy['base_url'], model=proxy['model'])
 
     elif step == 5:
         # 延展叙述：本地"含核心词+长度≤20"优先；否则交给 DeepSeek 评连贯+完整准确
@@ -493,7 +511,8 @@ def step_submit():
             method = 'local'
             sim = 0.0
         else:
-            ai = ds.ai_score_english(key, user_input, nxt.english, task='cont')
+            ai = ds.ai_score_english(key, user_input, nxt.english, task='cont',
+                                    base_url=proxy['base_url'], model=proxy['model'])
             if ai is None:
                 correct = False
                 method = 'local'
@@ -504,12 +523,14 @@ def step_submit():
                 sim = ai
         result.update(correct=correct, similarity=round(sim, 3),
                       standard_answer=nxt.english, method=method)
-        _apply_step_result(u, s, step, correct, user_input, nxt.english, key, result)
+        _apply_step_result(u, s, step, correct, user_input, nxt.english, key, result,
+                          base_url=proxy['base_url'], model=proxy['model'])
 
     return jsonify(**result)
 
 
-def _apply_step_result(u, s, step, correct, user_input, correct_answer, key, result):
+def _apply_step_result(u, s, step, correct, user_input, correct_answer, key, result,
+                       base_url=None, model=None):
     p = get_progress(u.id, s.id, step)
     if correct:
         p.proficiency = min(100, (p.proficiency or 0) + 10)
@@ -518,7 +539,8 @@ def _apply_step_result(u, s, step, correct, user_input, correct_answer, key, res
     p.last_reviewed = models.utcnow()
     p.is_mastered = p.proficiency >= 80
     if not correct:
-        err = ds.analyze_error(key, user_input, correct_answer, step)
+        err = ds.analyze_error(key, user_input, correct_answer, step,
+                              base_url=base_url, model=model)
         record_wrong(u.id, s.id, step, user_input, correct_answer, err)
         result['error_type'] = err
     db.session.commit()
@@ -605,12 +627,14 @@ def review_submit():
     w = WrongAnswer.query.get_or_404(wrong_id)
     s = Sentence.query.get(w.sentence_id)
     key = resolve_api_key(u)
+    proxy = get_ai_proxy()
     if step in (4, 5):
         correct = ds.check_svo(user_input, s.svo) if step == 4 else True
         if step == 5:
             correct = True  # 复习模式宽松判通过
     else:
-        sim = ds.score_similarity(key, user_input, s.chinese)
+        sim = ds.score_similarity(key, user_input, s.chinese,
+                                 base_url=proxy['base_url'], model=proxy['model'])
         correct = sim >= (0.80 if step == 3 else 0.75)
     p = get_progress(u.id, s.id, step)
     if correct:
@@ -871,6 +895,30 @@ def set_share():
                    has_shared_key=bool(stu.shared_api_key_id))
 
 
+@app.route('/api/v1/admin/ai-proxy', methods=['GET'])
+@admin_only
+def get_ai_proxy_config():
+    p = get_ai_proxy()
+    return jsonify(base_url=p['base_url'], model=p['model'])
+
+
+@app.route('/api/v1/admin/ai-proxy', methods=['POST'])
+@admin_only
+def save_ai_proxy_config():
+    data = request.get_json(silent=True) or {}
+    base_url = (data.get('base_url') or '').strip()
+    model = (data.get('model') or '').strip()
+    if not base_url:
+        return jsonify(error='Base URL 不能为空'), 400
+    if not model:
+        return jsonify(error='模型名不能为空'), 400
+    # 兼容用户可能把 chat/completions 后缀一起填进来
+    if base_url.rstrip('/').endswith('/chat/completions'):
+        base_url = base_url.rstrip('/')[: -len('/chat/completions')]
+    set_setting('ai_proxy', {'base_url': base_url, 'model': model})
+    return jsonify(message='AI 代理已保存', base_url=base_url, model=model)
+
+
 @app.route('/api/v1/admin/students', methods=['GET'])
 @admin_only
 def admin_students():
@@ -1089,6 +1137,87 @@ def upload_audio():
     ok_count = sum(1 for r in results if r['status'] == 'ok')
     return jsonify(message=f'音频处理完成，成功 {ok_count}/{len(files)}',
                    results=results)
+
+
+@app.route('/api/v1/admin/scan-audio', methods=['POST'])
+@admin_only
+def scan_audio():
+    """扫描课程音频文件夹，自动与数据库同步（供远程批量上传后一键入库）。
+
+    规则（文件名数字 = 句子序号，如 1.mp3 → 第1句）：
+      - 磁盘有文件、DB 未指向 → 自动写入 audio_url
+      - DB 指向某文件、但该文件在磁盘已不存在 → 清理引用（前端将显示缺音频）
+      - 磁盘文件序号在库中无对应句子 → 记录为孤儿文件，跳过
+    支持单课程扫描（body 传 course_id）或全量扫描（不传 course_id）。
+    """
+    data = request.get_json(silent=True) or {}
+    cid = data.get('course_id')
+    if cid:
+        course = Course.query.get_or_404(int(cid))
+        courses = [course]
+    else:
+        courses = Course.query.order_by(Course.id).all()
+
+    AUDIO_EXT = ('.mp3', '.wav', '.ogg', '.m4a')
+    report = []
+    total_updated = 0
+    total_cleared = 0
+    total_orphan = 0
+    for course in courses:
+        folder = os.path.join(COURSE_UPLOAD_DIR, str(course.id))
+        disk_files = {}        # sentence_order -> filename
+        orphans = []
+        if os.path.isdir(folder):
+            for fn in sorted(os.listdir(folder)):
+                low = fn.lower()
+                if not low.endswith(AUDIO_EXT):
+                    continue
+                m = re.match(r'(\d+)', os.path.splitext(fn)[0])
+                if not m:
+                    orphans.append(fn)
+                    continue
+                disk_files[int(m.group(1))] = fn
+        disk_filenames = set(disk_files.values())
+
+        sents = Sentence.query.filter_by(course_id=course.id).order_by(Sentence.sentence_order).all()
+        sent_orders = {s.sentence_order for s in sents}
+        updated, cleared = [], []
+        for s in sents:
+            disk_file = disk_files.get(s.sentence_order)
+            if disk_file:
+                target = f'/uploads/courses/{course.id}/{disk_file}'
+                if s.audio_url != target:
+                    s.audio_url = target
+                    updated.append(s.sentence_order)
+            else:
+                if s.audio_url:
+                    old_fn = s.audio_url.rsplit('/', 1)[-1]
+                    if old_fn and old_fn not in disk_filenames:
+                        s.audio_url = ''
+                        cleared.append(s.sentence_order)
+        db.session.commit()
+
+        # 孤儿：磁盘有序号但库无对应句子
+        orphan_orders = sorted(set(disk_files) - sent_orders)
+        orphan_files = [disk_files[o] for o in orphan_orders] + orphans
+        total_orphan += len(orphan_files)
+        report.append({
+            'course_id': course.id,
+            'title': course.title,
+            'disk_files': len(disk_files),
+            'updated': updated,
+            'cleared': cleared,
+            'updated_count': len(updated),
+            'cleared_count': len(cleared),
+            'orphan_files': orphan_files,
+            'orphan_count': len(orphan_files),
+        })
+        total_updated += len(updated)
+        total_cleared += len(cleared)
+
+    return jsonify(message=f'扫描完成：同步 {total_updated} 句音频，清理 {total_cleared} 条失效引用，{total_orphan} 个未匹配文件',
+                   total_updated=total_updated, total_cleared=total_cleared, total_orphan=total_orphan,
+                   report=report)
 
 
 def _parse_csv(raw):
@@ -1567,4 +1696,4 @@ if __name__ == '__main__':
             migrate()
         except Exception as e:
             print('migrate skipped:', e)
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)

@@ -37,3 +37,6 @@ tool.py
 # ── OS / editor ──
 .DS_Store
 Thumbs.db
+
+# ── Playwright CLI session (local test artifact) ──
+.playwright-cli/

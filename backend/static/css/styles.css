@@ -287,3 +287,125 @@ table.tbl td.ops .btn { margin: 2px 2px; }
   color: #fff;
   border-color: var(--primary);
 }
+
+/* ============================
+   管理后台 · PC 布局（学生端保持移动端不变）
+   左侧固定导航 + 宽内容区，不再挤在 640px 手机列里
+   ============================ */
+.admin-app {
+  max-width: 1440px;
+  flex-direction: row;
+  align-items: stretch;
+  min-height: 100vh;
+}
+.admin-side {
+  width: 232px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  padding: 18px 14px;
+  gap: 10px;
+}
+.admin-brand {
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.2;
+  padding: 4px 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.admin-brand span {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+.admin-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+.admin-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-dim);
+  text-decoration: none;
+  font-size: 15px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  transition: all .15s;
+}
+.admin-nav-item:hover { background: var(--surface-2); color: var(--text); }
+.admin-nav-item.active {
+  background: var(--primary-soft);
+  color: var(--text);
+  border-color: var(--primary);
+}
+.admin-side-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.admin-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.admin-head {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: rgba(15,20,32,0.92);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+  padding: 16px 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.admin-head h2 { margin: 0; font-size: 20px; }
+.admin-content { padding: 24px 28px; }
+
+/* PC 下管理表格更舒展，避免挤压换行 */
+.admin-content .card { padding: 20px 22px; }
+.admin-content table.tbl { font-size: 14px; }
+.admin-content table.tbl th,
+.admin-content table.tbl td { padding: 9px 12px; }
+.admin-content .course-card { gap: 16px; }
+
+/* 窄屏 / 小平板回退：侧栏变顶部横向滚动导航，内容单列 */
+@media (max-width: 900px) {
+  .admin-app { flex-direction: column; }
+  .admin-side {
+    width: 100%;
+    height: auto;
+    position: static;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 12px;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+  .admin-brand { border-bottom: none; padding: 4px 10px 4px 4px; }
+  .admin-nav { flex-direction: row; flex-wrap: nowrap; overflow-x: auto; flex: 1; gap: 6px; }
+  .admin-nav-item { white-space: nowrap; padding: 9px 12px; }
+  .admin-side-foot { flex-direction: row; border-top: none; padding-top: 0; }
+  .admin-side-foot .btn { white-space: nowrap; }
+  .admin-content { padding: 16px; }
+}
