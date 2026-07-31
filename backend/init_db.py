@@ -168,7 +168,7 @@ def migrate():
             'streak_bonus_cap': 10,       # 连续签到奖励封顶天数
         }
         for k, v in defaults.items():
-            if SystemSetting.query.get(k) is None:
+            if db.session.get(SystemSetting, k) is None:
                 db.session.add(SystemSetting(key=k, value=json.dumps(v)))
         db.session.commit()
         print('已初始化系统配置（签到/金币）。')
@@ -210,13 +210,13 @@ def migrate():
             },
         }
         for k, v in wm_defaults.items():
-            if SystemSetting.query.get(k) is None:
+            if db.session.get(SystemSetting, k) is None:
                 db.session.add(SystemSetting(key=k, value=json.dumps(v)))
         db.session.commit()
         print('已初始化单词大师配置。')
         # ---- v0.4 步骤重编号：在 Step3(听音) 与 Step4(中译英) 之间插入「跟读」Step4 ----
         # 原 Step4 中译英 -> 新 Step5；原 Step5 续写 -> 新 Step6。旧数据一次性位移，幂等（靠标记）。
-        if SystemSetting.query.get('migrated_step6') is None:
+        if db.session.get(SystemSetting, 'migrated_step6') is None:
             from models import CourseAssignment, StudentSentenceProgress, WrongAnswer
             acols = [r[1] for r in db.session.execute(
                 text("PRAGMA table_info(course_assignments)")).fetchall()]
@@ -225,10 +225,14 @@ def migrate():
                     "ALTER TABLE course_assignments ADD COLUMN step_6_unlocked BOOLEAN DEFAULT 0"))
                 db.session.commit()
             # 进度/错题：旧 step >= 4（中译英/续写）整体 +1（跟读无旧数据）
-            db.session.execute(text(
-                "UPDATE student_sentence_progress SET step = step + 1 WHERE step >= 4"))
-            db.session.execute(text(
-                "UPDATE wrong_answers SET step = step + 1 WHERE step >= 4"))
+            # 注意：student_sentence_progress 有 (student_id, sentence_id, step) 唯一约束，
+            # 单条 "SET step=step+1 WHERE step>=4" 在存在同句同生的 step=4 与 step=5 时会撞唯一键；
+            # 故改为从大到小逐档 +1，先挪高位再挪低位，避免中间态冲突（幂等，靠 migrated_step6 标记）。
+            for _old in range(7, 3, -1):
+                db.session.execute(text(
+                    "UPDATE student_sentence_progress SET step = step + 1 WHERE step = :s"), {"s": _old})
+                db.session.execute(text(
+                    "UPDATE wrong_answers SET step = step + 1 WHERE step = :s"), {"s": _old})
             for a in CourseAssignment.query.all():
                 # completed_steps：旧 >=4 元素 +1（2,3 不变）
                 if a.completed_steps:

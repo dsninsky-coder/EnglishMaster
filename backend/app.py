@@ -50,10 +50,15 @@ DEFAULT_SETTINGS = {
 }
 
 # ================= 系统版本与升级内容（登录页展示 / 数据兼容性参考） =================
-VERSION = 'v0.7.2'
+VERSION = 'v0.7.3'
 # 每个版本是否影响老数据：全部为非破坏性（仅新增列 / 受控数据重映射），无清库操作。
 # 详见 README「数据兼容性」一节；迁移前 init_db.py 会自动备份数据库。
 CHANGELOG = [
+    {'version': 'v0.7.3', 'date': '2026-07-31', 'title': '修复 v0.2→最新 升级迁移崩溃',
+     'items': [
+         '修复 init_db.py 步骤重编号迁移：原 "UPDATE step=step+1 WHERE step>=4" 在 (student_id,sentence_id,step) 唯一约束下会撞键崩溃；改为从大到小逐档 +1，避免中间态冲突',
+         '消除升级时 3 处 SQLAlchemy LegacyAPIWarning（Query.get → Session.get）',
+     ]},
     {'version': 'v0.7.2', 'date': '2026-07-31', 'title': '术语修正：人工复议',
      'items': [
          '将全部界面文案「附议」统一更正为「复议」（人工复议）；内部代码标识符保持 appeal 不变，无需迁移数据库',
