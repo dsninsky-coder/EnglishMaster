@@ -212,6 +212,11 @@ function goStep(n, skipFull) {
   if (n > 0 && !learn.unlocks[String(n)]) { toast('该步骤尚未解锁', true); return }
   // 进入步骤6（续写）之前，先展示全文回顾（预学），每次进入都显示
   if (n === 6 && !skipFull) { drawFullText(el('step-body')); return }
+  // 进入步骤7（单词巩固）：重置单词分批状态，从头开始整表乱序取词
+  if (n === 7) {
+    learn.words = null; learn.wordBatch = 0
+    learn.wordCorrectTotal = 0; learn.wordTotal = 0; learn.wordItems = null
+  }
   learn.step = n; learn.idx = 0; learn.results = []; learn.view = 'show'
   learn.queue = null; learn.wrongSet = new Set()   // 重置本步练习状态（重新开始）
   learn.showOverview = false; learn.hadRedo = false
@@ -504,7 +509,7 @@ async function submitStepN(sentenceId, step) {
     <button class="btn block" style="margin-top:10px" onclick="afterStepSubmit()">${lastOfPass ? '本轮结束 →' : '下一句 →'}</button>`
 }
 
-/* ============ Step7 单词巩固（v0.5） ============ */
+/* ============ Step7 单词巩固（v0.6：整表乱序 → 每批10个顺序取 → 音汉/英汉交替） ============ */
 const WORD_PER_ROUND = 10
 async function drawStep7(body) {
   if (!learn.words || !learn.words.length) {
@@ -513,9 +518,10 @@ async function drawStep7(body) {
       body.innerHTML = `<div class="card empty">${esc(r.data.error || '单词库为空，请管理员先提取单词')}</div>`
       return
     }
-    learn.words = r.data.words || []
-    learn.wordResults = []
-    learn.wordIdx = 0
+    learn.words = r.data.words || []      // 后端已对整个单词表乱序
+    learn.wordBatch = 0
+    learn.wordCorrectTotal = 0
+    learn.wordTotal = 0
   }
   if (!learn.words.length) {
     body.innerHTML = `<div class="card center"><h3>本课暂无单词</h3>
@@ -523,34 +529,46 @@ async function drawStep7(body) {
       <button class="btn" style="margin-top:12px" onclick="backToSteps()">返回步骤</button></div>`
     return
   }
-  const pool = learn.words.slice()
-  const pick = shuffle(pool).slice(0, Math.min(WORD_PER_ROUND, pool.length))
-  const half = Math.ceil(pick.length / 2)
-  const items = pick.map((w, i) => ({ word: w, mode: i < half ? 'en2zh' : 'audio2zh',
-    answered: false, correct: null, reason: '' }))
+  const start = learn.wordBatch * WORD_PER_ROUND
+  const batch = learn.words.slice(start, start + WORD_PER_ROUND)
+  if (!batch.length) { finishStep7(); return }   // 全部取完 → 结算
+  // 本批 10 个：音译中 / 英译中 交替（首词从「音译中」开始）
+  const items = batch.map((w, i) => ({
+    word: w,
+    mode: (i % 2 === 0) ? 'audio2zh' : 'en2zh',
+    answered: false, correct: null, reason: ''
+  }))
   learn.wordItems = items
+  const total = learn.words.length
   const cards = items.map((it, i) => {
     const head = it.mode === 'en2zh'
       ? `<div class="word-en">${esc(it.word)}</div>`
       : `<div class="word-audio">
-           <button class="btn ghost sm" onclick="speakWord('${esc(it.word)}','en-US')">🇺🇸 美音</button>
-           <button class="btn ghost sm" onclick="speakWord('${esc(it.word)}','en-GB')">🇬🇧 英音</button>
+           <button class="btn ghost sm" onclick="playYoudao('${esc(it.word)}','us')">🇺🇸 美音</button>
+           <button class="btn ghost sm" onclick="playYoudao('${esc(it.word)}','uk')">🇬🇧 英音</button>
            <span class="muted">（听发音，写出中文意思）</span>
          </div>`
     return `<div class="word-card" id="wc_${i}">
-      <div class="spread"><span class="muted">第 ${i + 1}/${items.length} 词 · ${it.mode === 'en2zh' ? '英译中' : '音译中'}</span></div>
+      <div class="spread"><span class="muted">第 ${start + i + 1}/${total} 词 · ${it.mode === 'en2zh' ? '英译中' : '音译中'}</span></div>
       ${head}
       <input id="wa_${i}" class="word-input" placeholder="写出中文意思" />
       <button class="btn ghost sm" style="margin-top:8px" onclick="judgeWord(${i})">判断</button>
       <div id="wr_${i}"></div>
     </div>`
   }).join('')
+  const lastBatch = (start + WORD_PER_ROUND) >= total
   body.innerHTML = `<div class="card">
     <div class="spread"><h3>Step 7 · 单词巩固</h3><button class="btn ghost sm" onclick="backToSteps()">← 步骤</button></div>
-    <p class="muted">从本课单词库随机抽 ${items.length} 个词：前 ${half} 个看英文写意思，后 ${items.length - half} 个听发音写意思。每词判断后可看解析。</p>
+    <p class="muted">本课单词已整体乱序，每批 10 个、音译中/英译中交替（从听音开始）。已完成 ${start}/${total} 词。</p>
     ${cards}
-    <button class="btn block" style="margin-top:16px" id="wfinish" onclick="finishStep7()" disabled>完成本步</button>
+    <button class="btn block" style="margin-top:16px" id="wnext" disabled
+      onclick="${lastBatch ? 'finishStep7()' : 'nextWordBatch()'}">${lastBatch ? '完成本步' : '下一批单词 →'}</button>
   </div>`
+}
+
+function nextWordBatch() {
+  learn.wordBatch += 1
+  drawStep7(el('step-body'))
 }
 
 async function judgeWord(i) {
@@ -564,26 +582,30 @@ async function judgeWord(i) {
   it.answered = true; it.correct = d.correct; it.reason = d.reason || ''
   const wr = el('wr_' + i)
   if (d.correct === true) {
+    learn.wordCorrectTotal = (learn.wordCorrectTotal || 0) + 1
+    learn.wordTotal = (learn.wordTotal || 0) + 1
     playTone('ok')
     wr.innerHTML = `<div class="feedback ok" style="margin-top:6px">✅ 正确！</div>`
     el('wc_' + i).classList.add('done')
   } else if (d.correct === false) {
+    learn.wordTotal = (learn.wordTotal || 0) + 1
     playTone('err')
-    wr.innerHTML = `<div class="feedback retry" style="margin-top:6px">❌ 不正确<br/><b>解析：</b>${esc(d.reason || '与标准意思有差异，请对照学习。')}</div>`
+    const added = d.added_error ? '<div class="muted" style="margin-top:4px">📕 已自动加入生词表</div>' : ''
+    wr.innerHTML = `<div class="feedback retry" style="margin-top:6px">❌ 不正确<br/><b>解析：</b>${esc(d.reason || '与标准意思有差异，请对照学习。')}</div>${added}`
     el('wc_' + i).classList.add('wrong')
   } else {
+    learn.wordTotal = (learn.wordTotal || 0) + 1
     playTone('warn')
     wr.innerHTML = `<div class="feedback" style="margin-top:6px">⚠️ ${esc(d.reason || '暂无法判分')}</div>`
   }
   if (learn.wordItems.every(x => x.answered)) {
-    const fb = el('wfinish'); if (fb) fb.disabled = false
+    const fb = el('wnext'); if (fb) fb.disabled = false
   }
 }
 
 function finishStep7() {
-  const items = learn.wordItems || []
-  const correct = items.filter(x => x.correct === true).length
-  const total = items.length
+  const total = learn.wordTotal || 0
+  const correct = learn.wordCorrectTotal || 0
   const acc = total ? correct / total : 0
   const perfect = total > 0 && correct === total
   finishStep(7, acc, perfect)
@@ -628,19 +650,15 @@ function playTone(type) {
   } catch (e) {}
 }
 
-function speakWord(word, variant) {
-  /* 浏览器内置 TTS 朗读单词（美音/英音），无需音频文件 */
+function playYoudao(word, variant) {
+  /* 有道词典发音 API（type=0 美音 / type=1 英音），跨域音频可直接播放，无需本地文件。
+     不使用浏览器 speechSynthesis（移动端兼容性差）。 */
+  const t = (variant === 'uk') ? 1 : 0
+  const url = `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(word)}&type=${t}`
   try {
-    if (!('speechSynthesis' in window)) { toast('当前浏览器不支持语音朗读', true); return }
-    const u = new SpeechSynthesisUtterance(word)
-    u.lang = variant || 'en-US'; u.rate = 0.9
-    const vs = window.speechSynthesis.getVoices() || []
-    const exact = vs.find(v => (v.lang || '').replace('_', '-').toLowerCase() === (variant || 'en-US').toLowerCase())
-    const sim = vs.find(v => (v.lang || '').toLowerCase().startsWith((variant || 'en-US').slice(0, 2).toLowerCase()))
-    if (exact) u.voice = exact; else if (sim) u.voice = sim
-    window.speechSynthesis.cancel()
-    window.speechSynthesis.speak(u)
-  } catch (e) {}
+    const a = new Audio(url)
+    a.play().catch(() => { toast('发音加载失败，请检查网络', true) })
+  } catch (e) { toast('当前环境不支持音频播放', true) }
 }
 
 /* 跳过：不会做时直接看答案，本句判为未通过并纳入下一轮复习循环 */

@@ -284,6 +284,46 @@ class WordDataManager:
             result[wl.name] = Word.query.filter_by(list_id=wl.id).count()
         return result
 
+    # ---------------- 生词表（与听说大师 Step7 打通） ----------------
+    def add_error_word(self, username, word):
+        """将生词加入该用户的『生词表』（每 10 词一个 list，自动追加、去重）。
+
+        在单词大师 WordList 表中以 '生词表-<username>' / '生词表-<username>-2' ... 命名，
+        单词大师学习单元会自动出现这些列表，按 10 词/列表排列。
+        返回 True 表示本次实际新增（已存在则跳过返回 False）。
+        """
+        import re
+        word = (word or '').strip()
+        if not word:
+            return False
+        prefix = f"生词表-{username}"
+        pat = re.compile(rf"^{re.escape(prefix)}(-\d+)?$")
+        cands = WordList.query.filter(WordList.name.like(f"{prefix}%")).all()
+        lists = [wl for wl in cands if pat.match(wl.name)]
+        # 去重：该词已存在于任一生词表则跳过
+        for wl in lists:
+            if Word.query.filter(Word.list_id == wl.id,
+                                 db.func.lower(Word.word) == word.lower()).first():
+                return False
+        # 找第一个未满（<10 词）的 list（按名称升序，最新的在最后）
+        target = None
+        for wl in sorted(lists, key=lambda x: x.name):
+            if Word.query.filter_by(list_id=wl.id).count() < 10:
+                target = wl
+                break
+        if target is None:
+            idx = len(lists) + 1
+            name = prefix if idx == 1 else f"{prefix}-{idx}"
+            max_order = db.session.query(db.func.max(WordList.order_index)).scalar() or 0
+            target = WordList(name=name, order_index=max_order + 1)
+            db.session.add(target)
+            db.session.flush()
+        max_o = db.session.query(db.func.max(Word.order_index)).filter_by(
+            list_id=target.id).scalar() or 0
+        db.session.add(Word(list_id=target.id, word=word, meaning='', order_index=max_o + 1))
+        db.session.commit()
+        return True
+
     def get_sorted_list_names(self):
         names = [wl.name for wl in WordList.query.all()]
 

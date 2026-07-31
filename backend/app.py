@@ -23,6 +23,7 @@ import models
 from models import db, User, AdminShareKey, Course, Sentence, CourseAssignment, \
     StudentSentenceProgress, WrongAnswer, CoinTransaction, ShopItem, PurchaseOrder, \
     Wish, WishSupport, SystemSetting, CourseWord
+from word_data import WordDataManager
 import deepseek_client as ds
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -501,7 +502,14 @@ def word_judge():
             return jsonify(correct=None, reason='AI 返回无法解析')
         correct = bool(obj.get('correct', False))
         reason = (obj.get('reason') or '').strip()
-        return jsonify(correct=correct, reason=reason)
+        # 判错：自动加入该生词表（与单词大师打通，每 10 词一个 list）
+        added_error = False
+        if correct is False:
+            try:
+                added_error = WordDataManager().add_error_word(u.username, word)
+            except Exception:
+                added_error = False
+        return jsonify(correct=correct, reason=reason, added_error=added_error)
     except Exception:
         return jsonify(correct=None, reason='AI 返回解析失败')
 

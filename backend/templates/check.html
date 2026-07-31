@@ -56,11 +56,6 @@
         <div class="quiz-word-row" id="quiz-word-row">
             <div class="quiz-word" id="question">...</div>
             <div id="speak-btn" class="speak-btns" style="display:none">
-                <button class="speak-btn"
-                        onclick="speakWordLocal(currentWord && currentWord.word)"
-                        title="浏览器朗读（离线）">
-                    🔊
-                </button>
                 <button class="speak-btn speak-btn-youdao"
                         onclick="speakWordYoudao(currentWord && currentWord.word, 0)"
                         title="有道美音发音（在线）">
@@ -77,11 +72,6 @@
         <div id="audio-play-area" style="display:none;text-align:center;padding:20px 0;">
             <p style="color:var(--gray-500);font-size:14px;margin-bottom:18px;">🎧 听发音，写出中文意思</p>
             <div style="display:flex;gap:18px;justify-content:center;">
-                <button class="audio-big-btn" onclick="speakWordLocal(currentWord && currentWord.word)"
-                        title="浏览器朗读（离线）">
-                    <span class="audio-big-icon">🔊</span>
-                    <span class="audio-big-label">离线发音</span>
-                </button>
                 <button class="audio-big-btn audio-big-btn-youdao"
                         onclick="speakWordYoudao(currentWord && currentWord.word, 0)"
                         title="有道美音发音（在线）">
@@ -225,27 +215,7 @@ function playWrongSound() {
 
 // ---- TTS 发音（英→中模式下显示发音按钮）----
 
-// 方式①：浏览器 Web Speech API（离线可用）
-function speakWordLocal(word) {
-    if (!word) return;
-    if (!('speechSynthesis' in window)) {
-        alert('当前浏览器不支持语音合成，请使用有道发音。');
-        return;
-    }
-    window.speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(word);
-    utt.lang = 'en-US';
-    utt.rate = 0.85;
-    utt.pitch = 1.0;
-    const voices = window.speechSynthesis.getVoices();
-    const enVoice = voices.find(v => v.lang.startsWith('en') && v.localService)
-        || voices.find(v => v.lang.startsWith('en'))
-        || null;
-    if (enVoice) utt.voice = enVoice;
-    window.speechSynthesis.speak(utt);
-}
-
-// 方式②：有道词典音频（在线，高质量）
+// 有道词典音频（在线，高质量）—— 唯一发音方式（禁用浏览器 speechSynthesis，移动端兼容性差）
 function speakWordYoudao(word, type) {
     if (!word) return;
     // type=0 美式发音，type=1 英式发音
@@ -253,13 +223,12 @@ function speakWordYoudao(word, type) {
     const url = `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(word)}&type=${type}`;
     const audio = new Audio(url);
     audio.play().catch(() => {
-        // 如有道无法访问，降级到本地 TTS
-        speakWordLocal(word);
+        alert('有道发音加载失败，请检查网络连接');
     });
 }
 
-// 兼容旧调用（保留 speakWord 名称）
-function speakWord(word) { speakWordLocal(word); }
+// 兼容旧调用（保留 speakWord 名称，统一走有道）
+function speakWord(word) { speakWordYoudao(word, 0); }
 
 // 语音列表异步加载（Chrome 需要这个）
 if ('speechSynthesis' in window) {
