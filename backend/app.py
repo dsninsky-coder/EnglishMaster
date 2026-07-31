@@ -50,10 +50,14 @@ DEFAULT_SETTINGS = {
 }
 
 # ================= 系统版本与升级内容（登录页展示 / 数据兼容性参考） =================
-VERSION = 'v0.7.4'
+VERSION = 'v0.7.5'
 # 每个版本是否影响老数据：全部为非破坏性（仅新增列 / 受控数据重映射），无清库操作。
 # 详见 README「数据兼容性」一节；迁移前 init_db.py 会自动备份数据库。
 CHANGELOG = [
+    {'version': 'v0.7.5', 'date': '2026-07-31', 'title': '修复 Step7 音译中判分漏洞',
+     'items': [
+         'Step7 单词巩固的音译中/英译中模式，增加前置校验：答案与英文单词相同、或不包含中文字符时直接判错，避免 AI 把英文单词误判为正确',
+     ]},
     {'version': 'v0.7.4', 'date': '2026-07-31', 'title': '修复 v0.2→最新 升级迁移崩溃（续）',
      'items': [
          '修复 init_db.py 迁移顺序：step_7_unlocked / 人工复议 appeal_* 列原在 CourseAssignment ORM 查询之后才补齐，导致 ORM SELECT 报 no such column: step_7_unlocked；现改为在 ORM 查询前补齐本表全部列',
@@ -547,8 +551,17 @@ def word_judge():
     data = request.get_json(silent=True) or {}
     word = (data.get('word') or '').strip()
     answer = (data.get('answer') or '').strip()
+    mode = data.get('mode') or 'en2zh'
     if not word or not answer:
         return jsonify(correct=False, reason='请填写单词与你的翻译')
+    # 音译中 / 英译中 都要求写出中文意思，先做硬性校验，避免 AI 把英文单词误判为正确
+    if mode in ('audio2zh', 'en2zh'):
+        ans_norm = re.sub(r'[\s\u3000]+', '', answer).lower()
+        word_norm = re.sub(r'[\s\u3000]+', '', word).lower()
+        if ans_norm == word_norm:
+            return jsonify(correct=False, reason='请写出中文意思，不要直接写英文单词')
+        if not re.search(r'[\u4e00-\u9fff]', answer):
+            return jsonify(correct=False, reason='请用中文写出该单词的意思')
     key = resolve_api_key(u)
     proxy = get_ai_proxy()
     if not key:
