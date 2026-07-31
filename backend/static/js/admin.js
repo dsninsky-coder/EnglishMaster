@@ -102,17 +102,17 @@ function adminCoursesInner() {
     <div id="courseList"><div class="empty">加载中…</div></div>
   </div>`
 }
-/* ---------- 人工附议（学生申请 → 管理员裁决） ---------- */
+/* ---------- 人工复议（学生申请 → 管理员裁决） ---------- */
 function adminAppealsInner() {
   return `<div class="card">
     <div class="spread">
-      <h3>⚖️ 人工附议</h3>
+      <h3>⚖️ 人工复议</h3>
       <div class="row">
         <button class="btn ghost sm" onclick="loadAppeals('pending')">待处理</button>
         <button class="btn ghost sm" onclick="loadAppeals('all')">全部</button>
       </div>
     </div>
-    <p class="muted" style="font-size:13px">学生答错后申请人工附议（花费 2 金币）。判定「学生正确」将返还金币并补发被暂扣的奖励、标记该句掌握；判定「学生错误」将没收金币并重新锁定课程（仅被锁步骤需重学，已完成步骤不受影响）。</p>
+    <p class="muted" style="font-size:13px">学生答错后申请人工复议（花费 2 金币）。判定「学生正确」将返还金币并补发被暂扣的奖励、标记该句掌握；判定「学生错误」将没收金币并重新锁定课程（仅被锁步骤需重学，已完成步骤不受影响）。</p>
     <div id="appealList"><div class="empty">加载中…</div></div>
   </div>`
 }
@@ -124,7 +124,7 @@ async function loadAppeals(status) {
   if (!box) return
   if (!r.ok) { box.innerHTML = '<div class="empty">加载失败</div>'; return }
   const list = r.data.appeals || []
-  if (!list.length) { box.innerHTML = '<div class="empty">暂无附议</div>'; refreshAppealBadge(); return }
+  if (!list.length) { box.innerHTML = '<div class="empty">暂无复议</div>'; refreshAppealBadge(); return }
   box.innerHTML = list.map(a => {
     const resolved = a.status !== 'pending'
     const actions = resolved

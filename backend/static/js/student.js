@@ -176,7 +176,7 @@ async function renderLearn(courseId) {
     enHint: r.data.en_hint || { words: 3, changes: 5 },  // 中译英提示配置（管理员后台设置）
     words: [], wordResults: [], wordIdx: 0,   // Step7 单词巩固状态
     appealLocked: !!courseInfo.appeal_locked, appealLockStep: courseInfo.appeal_lock_step || null,
-    appealedSet: new Set(),   // 已申请附议的句子/单词，防重复
+    appealedSet: new Set(),   // 已申请复议的句子/单词，防重复
   }
   drawLearn()
 }
@@ -195,7 +195,7 @@ function drawLearn() {
   const banner = learn.appealLocked
     ? `<div class="card" style="border:1px solid #e74c3c;background:#fff5f5">
          <b>⚠️ 课程已锁定</b>
-         <p class="muted" style="margin-top:6px">人工附议被驳回，需重新完成 <b>Step ${learn.appealLockStep}</b> 才能解锁后续内容。已完成的步骤不受影响。</p>
+         <p class="muted" style="margin-top:6px">人工复议被驳回，需重新完成 <b>Step ${learn.appealLockStep}</b> 才能解锁后续内容。已完成的步骤不受影响。</p>
        </div>` : ''
   el('app').innerHTML = studentFrame(`
     ${banner}
@@ -519,14 +519,14 @@ async function submitStepN(sentenceId, step) {
   let appealBtn = ''
   if (!d.correct && [2, 3, 5, 6].includes(step) && !learn.appealedSet.has(sentenceId)) {
     appealBtn = `<button class="btn ghost block" style="margin-top:8px" id="appealBtn"
-      onclick="appealSentence(${sentenceId}, ${step}, '${esc(std)}')">⚖️ 申请人工附议（花费 2 金币）</button>`
+      onclick="appealSentence(${sentenceId}, ${step}, '${esc(std)}')">⚖️ 申请人工复议（花费 2 金币）</button>`
   }
   fb.innerHTML = `<div class="feedback ${cls}">${head}${extra}</div>
     ${appealBtn}
     <button class="btn block" style="margin-top:10px" onclick="afterStepSubmit()">${lastOfPass ? '本轮结束 →' : '下一句 →'}</button>`
 }
 
-/* 学生申请人工附议：扣 2 金币，该题暂记通过以便继续 */
+/* 学生申请人工复议：扣 2 金币，该题暂记通过以便继续 */
 async function appealSentence(sentenceId, step, std) {
   const uin = (el('uin') && el('uin').value || '').trim()
   const btn = el('appealBtn')
@@ -534,10 +534,10 @@ async function appealSentence(sentenceId, step, std) {
   const r = await api('/step/appeal', 'POST', { sentence_id: sentenceId, step, user_input: uin, standard_answer: std })
   if (!r.ok) {
     toast(r.data.error || '申请失败', true)
-    if (btn) { btn.disabled = false; btn.textContent = '⚖️ 申请人工附议（花费 2 金币）' }
+    if (btn) { btn.disabled = false; btn.textContent = '⚖️ 申请人工复议（花费 2 金币）' }
     return
   }
-  toast(r.data.message || '已申请人工附议', false)
+  toast(r.data.message || '已申请人工复议', false)
   if (learn.curSentIdx != null) learn.wrongSet.delete(learn.curSentIdx)
   learn.appealedSet.add(sentenceId)
   afterStepSubmit()
@@ -626,7 +626,7 @@ async function judgeWord(i) {
     playTone('err')
     const added = d.added_error ? '<div class="muted" style="margin-top:4px">📕 已自动加入生词表</div>' : ''
     const appealed = learn.appealedSet.has('w' + i)
-    const appealBtn = appealed ? '' : `<button class="btn ghost sm" style="margin-top:6px" id="wapp_${i}" onclick="appealWord(${i}, '${esc(it.word)}')">⚖️ 人工附议(2金币)</button>`
+    const appealBtn = appealed ? '' : `<button class="btn ghost sm" style="margin-top:6px" id="wapp_${i}" onclick="appealWord(${i}, '${esc(it.word)}')">⚖️ 人工复议(2金币)</button>`
     wr.innerHTML = `<div class="feedback retry" style="margin-top:6px">❌ 不正确<br/><b>解析：</b>${esc(d.reason || '与标准意思有差异，请对照学习。')}</div>${added}${appealBtn}`
     el('wc_' + i).classList.add('wrong')
   } else {
@@ -647,7 +647,7 @@ function finishStep7() {
   finishStep(7, acc, perfect)
 }
 
-/* Step7 单词巩固：学生对判错的单词申请人工附议（2 金币），暂记通过 */
+/* Step7 单词巩固：学生对判错的单词申请人工复议（2 金币），暂记通过 */
 async function appealWord(i, word) {
   const it = learn.wordItems[i]
   const ans = (el('wa_' + i).value || '').trim()
@@ -657,15 +657,15 @@ async function appealWord(i, word) {
     { sentence_id: null, course_id: learn.courseId, step: 7, user_input: ans, standard_answer: word })
   if (!r.ok) {
     toast(r.data.error || '申请失败', true)
-    if (btn) { btn.disabled = false; btn.textContent = '⚖️ 人工附议(2金币)' }
+    if (btn) { btn.disabled = false; btn.textContent = '⚖️ 人工复议(2金币)' }
     return
   }
-  toast(r.data.message || '已申请人工附议', false)
+  toast(r.data.message || '已申请人工复议', false)
   it.answered = true; it.correct = true; it.appeal = true
   learn.wordCorrectTotal = (learn.wordCorrectTotal || 0) + 1
   learn.wordTotal = (learn.wordTotal || 0) + 1
   learn.appealedSet.add('w' + i)
-  el('wr_' + i).innerHTML = `<div class="feedback ok" style="margin-top:6px">✅ 已申请人工附议，暂记通过，等待审核</div>`
+  el('wr_' + i).innerHTML = `<div class="feedback ok" style="margin-top:6px">✅ 已申请人工复议，暂记通过，等待审核</div>`
   el('wc_' + i).classList.add('done')
   if (learn.wordItems.every(x => x.answered)) { const fb = el('wnext'); if (fb) fb.disabled = false }
 }
@@ -822,7 +822,7 @@ async function finishStep(step, accuracy, perfect) {
   } else {
     toast('已记录进度')
   }
-  // 刷新解锁状态与人工附议重锁状态
+  // 刷新解锁状态与人工复议重锁状态
   const cr = await api('/courses')
   if (cr.ok) {
     const info = (cr.data.courses || []).find(c => String(c.course_id) === String(learn.courseId))

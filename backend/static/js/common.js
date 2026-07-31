@@ -84,7 +84,7 @@ function adminFrame(inner, activeTab) {
   const tabs = [
     ['courses', '🎧 听说管理'], ['words', '📚 单词管理'],
     ['rewards', '🎁 奖励管理'], ['students', '👥 学员管理'],
-    ['appeals', '⚖️ 人工附议'], ['system', '🛠️ 系统工具'],
+    ['appeals', '⚖️ 人工复议'], ['system', '🛠️ 系统工具'],
   ]
   const labels = {}
   tabs.forEach(([k, l]) => { labels[k] = l })

@@ -97,9 +97,9 @@ class CourseAssignment(db.Model):
     completion_awarded = db.Column(db.Boolean, default=False)
     # 解锁式学习：free=自由学习（已解锁即可开始）/ locked=解锁式（需完成上一门才解锁下一门）
     unlock_mode = db.Column(db.String(16), default='free')
-    # 人工附议：被驳回后课程重新上锁，需重学该步
+    # 人工复议：被驳回后课程重新上锁，需重学该步
     appeal_locked = db.Column(db.Boolean, default=False)
-    # 附议待审期间，本步奖励暂扣；appeal_suppressed 存 [step]，appeal_suppressed_perfect 存 {step: 是否完美}
+    # 复议待审期间，本步奖励暂扣；appeal_suppressed 存 [step]，appeal_suppressed_perfect 存 {step: 是否完美}
     appeal_suppressed = db.Column(db.JSON, default=list)
     appeal_suppressed_perfect = db.Column(db.JSON, default=dict)
 
@@ -160,7 +160,7 @@ class CoinTransaction(db.Model):
 
 
 class Appeal(db.Model):
-    """学生人工附议（对系统判错的题目申请人工复核）。
+    """学生人工复议（对系统判错的题目申请人工复核）。
 
     - 学生答错后申请，花费 2 金币；题目暂记为"默认通过"以便继续；
     - 管理员判定：通过(学生没错)→ 返还 2 金币、补发本步被暂扣奖励、标记该句掌握；

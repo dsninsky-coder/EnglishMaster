@@ -258,7 +258,7 @@ def migrate():
             db.session.commit()
             print('已为 course_assignments 增加 step_7_unlocked 列。')
         # db.create_all() 已建单词大师新表（word_lists / words / word_user_states / word_exam_configs）
-        # course_assignments: 增加人工附议相关列（appeal_locked / appeal_suppressed / appeal_suppressed_perfect）
+        # course_assignments: 增加人工复议相关列（appeal_locked / appeal_suppressed / appeal_suppressed_perfect）
         aacols = [r[1] for r in db.session.execute(
             text("PRAGMA table_info(course_assignments)")).fetchall()]
         for col, ctype in [

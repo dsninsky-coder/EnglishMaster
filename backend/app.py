@@ -50,14 +50,18 @@ DEFAULT_SETTINGS = {
 }
 
 # ================= 系统版本与升级内容（登录页展示 / 数据兼容性参考） =================
-VERSION = 'v0.7'
+VERSION = 'v0.7.2'
 # 每个版本是否影响老数据：全部为非破坏性（仅新增列 / 受控数据重映射），无清库操作。
 # 详见 README「数据兼容性」一节；迁移前 init_db.py 会自动备份数据库。
 CHANGELOG = [
-    {'version': 'v0.7', 'date': '2026-07-31', 'title': '人工附议 + 体验修复',
+    {'version': 'v0.7.2', 'date': '2026-07-31', 'title': '术语修正：人工复议',
      'items': [
-         '新增人工附议：答错自认正确可花 2 金币申请仲裁，管理员人工判对错',
-         '管理员新增「⚖️ 人工附议」独立栏目，待办带角标',
+         '将全部界面文案「附议」统一更正为「复议」（人工复议）；内部代码标识符保持 appeal 不变，无需迁移数据库',
+     ]},
+    {'version': 'v0.7', 'date': '2026-07-31', 'title': '人工复议 + 体验修复',
+     'items': [
+         '新增人工复议：答错自认正确可花 2 金币申请仲裁，管理员人工判对错',
+         '管理员新增「⚖️ 人工复议」独立栏目，待办带角标',
          '课程管理新增「一键提取所有课程单词」',
          'Step2 补音效；Step3 加入「跳过看答案」',
      ]},
@@ -438,7 +442,7 @@ def my_courses():
             else:
                 status = 'start' if i == first_incomplete else 'locked'  # 未解锁（待解锁）
         if a.appeal_locked:
-            status = 'start'   # 附议重锁课程仍可进入重学被锁步骤
+            status = 'start'   # 复议重锁课程仍可进入重学被锁步骤
         out.append({
             'assignment_id': a.id,
             'course_id': c.id,
@@ -465,7 +469,7 @@ def my_courses():
 def course_sentences(course_id):
     u = current_user()
     course = Course.query.get_or_404(course_id)
-    # 人工附议重锁状态（学生端进入课程时用于拦截）
+    # 人工复议重锁状态（学生端进入课程时用于拦截）
     asm = CourseAssignment.query.filter_by(student_id=u.id, course_id=course_id).first() if u.role == 'student' else None
     appeal_locked = bool(asm and asm.appeal_locked)
     appeal_lock_step = asm.current_step if appeal_locked else None
@@ -745,7 +749,7 @@ def step_finish():
     awards = []
     if step not in (a.completed_steps or []):
         a.completed_steps = (a.completed_steps or []) + [step]
-        # 该步是否存在待审附议：存在则先暂扣本步奖励，待管理员裁决后补发
+        # 该步是否存在待审复议：存在则先暂扣本步奖励，待管理员裁决后补发
         has_pending_appeal = Appeal.query.filter_by(
             student_id=u.id, course_id=course_id, step=step, status='pending').first() is not None
         # 仅评分步骤（SCORED_STEPS）发放通关/完美奖励；跟读(4)与沉浸(1)为非评分练习；强制解锁不发奖励
@@ -758,7 +762,7 @@ def step_finish():
                 perf_map = dict(a.appeal_suppressed_perfect or {})
                 perf_map[str(step)] = bool(perfect)
                 a.appeal_suppressed_perfect = perf_map
-                awards.append('附议待审·奖励暂扣')
+                awards.append('复议待审·奖励暂扣')
             else:
                 add_coins(u.id, 1, f'Step{step}通关奖励', category='study')
                 awards.append('Step通关 +1')
@@ -768,7 +772,7 @@ def step_finish():
                     u.total_perfect_steps = (u.total_perfect_steps or 0) + 1
                     add_coins(u.id, 3, f'Step{step}完美通关奖励', category='study')
                     awards.append('完美通关 +3')
-        # 若该步已无待审附议，解除课程重锁（重学通过）
+        # 若该步已无待审复议，解除课程重锁（重学通过）
         if a.appeal_locked and not Appeal.query.filter_by(
                 student_id=u.id, course_id=course_id, step=step, status='pending').first():
             a.appeal_locked = False
@@ -786,16 +790,16 @@ def step_finish():
                    completed_steps=a.completed_steps)
 
 
-# ---------------- 人工附议（学生申请 / 管理员裁决） ----------------
-APPEAL_COST = 2   # 每次人工附议消耗金币
+# ---------------- 人工复议（学生申请 / 管理员裁决） ----------------
+APPEAL_COST = 2   # 每次人工复议消耗金币
 
 
 @app.route('/api/v1/step/appeal', methods=['POST'])
 @jwt_required()
 def step_appeal():
-    """学生对系统判错的题目申请人工附议（花费 2 金币）。
+    """学生对系统判错的题目申请人工复议（花费 2 金币）。
 
-    题目暂记为"默认通过"以便继续；奖励在 step_finish 时若该步存在待审附议则暂扣，
+    题目暂记为"默认通过"以便继续；奖励在 step_finish 时若该步存在待审复议则暂扣，
     待管理员裁决后再补发（通过）或永久扣留（驳回）。
     """
     u = current_user()
@@ -805,25 +809,25 @@ def step_appeal():
     user_input = (data.get('user_input') or '').strip()
     standard_answer = (data.get('standard_answer') or '').strip()
     if step not in (2, 3, 5, 6, 7):
-        return jsonify(error='该步骤不支持人工附议'), 400
+        return jsonify(error='该步骤不支持人工复议'), 400
     s = Sentence.query.get(sentence_id) if sentence_id else None
     course_id = s.course_id if s else data.get('course_id')
     if not course_id:
         return jsonify(error='缺少课程信息'), 400
-    # 防重复：同一题目同一学生同一待审附议不再扣费
+    # 防重复：同一题目同一学生同一待审复议不再扣费
     dup = Appeal.query.filter_by(student_id=u.id, course_id=course_id, step=step, status='pending')
     dup = dup.filter_by(sentence_id=sentence_id) if sentence_id else dup.filter(Appeal.sentence_id.is_(None))
     if dup.first():
-        return jsonify(error='该题目已申请附议，等待审核中', already=True)
+        return jsonify(error='该题目已申请复议，等待审核中', already=True)
     if (u.coin_balance or 0) < APPEAL_COST:
-        return jsonify(error=f'金币不足，无法申请人工附议（需 {APPEAL_COST} 金币）'), 400
-    add_coins(u.id, -APPEAL_COST, f'申请人工附议（Step{step}）', category='appeal')
+        return jsonify(error=f'金币不足，无法申请人工复议（需 {APPEAL_COST} 金币）'), 400
+    add_coins(u.id, -APPEAL_COST, f'申请人工复议（Step{step}）', category='appeal')
     db.session.add(Appeal(student_id=u.id, course_id=course_id, step=step,
                           sentence_id=sentence_id, student_answer=user_input,
                           standard_answer=standard_answer, status='pending'))
     db.session.commit()
     return jsonify(ok=True, cost=APPEAL_COST, balance=u.coin_balance,
-                   message=f'已申请人工附议，扣除 {APPEAL_COST} 金币，等待管理员审核')
+                   message=f'已申请人工复议，扣除 {APPEAL_COST} 金币，等待管理员审核')
 
 
 @app.route('/api/v1/admin/appeals', methods=['GET'])
@@ -864,7 +868,7 @@ def admin_appeal_resolve(appeal_id):
     u = current_user()
     a = Appeal.query.get_or_404(appeal_id)
     if a.status != 'pending':
-        return jsonify(error='该附议已处理'), 400
+        return jsonify(error='该复议已处理'), 400
     data = request.get_json(silent=True) or {}
     decision = data.get('decision')
     note = (data.get('note') or '').strip()
@@ -880,7 +884,7 @@ def admin_appeal_resolve(appeal_id):
     bonus_amt = 0
     if decision == 'approved':
         # 学生没错：返还 2 金币 + 补发该步被暂扣奖励 + 标记该句掌握
-        add_coins(a.student_id, APPEAL_COST, '人工附议通过·返还金币', category='appeal', operator_id=u.id)
+        add_coins(a.student_id, APPEAL_COST, '人工复议通过·返还金币', category='appeal', operator_id=u.id)
         refund_amt = APPEAL_COST
         if a.sentence_id:
             p = get_progress(a.student_id, a.sentence_id, a.step)
@@ -892,18 +896,18 @@ def admin_appeal_resolve(appeal_id):
             supp = list(asm.appeal_suppressed or [])
             perf_map = dict(asm.appeal_suppressed_perfect or {})
             if a.step in supp:
-                add_coins(a.student_id, 1, f'Step{a.step}通关奖励（附议通过补发）', category='study', operator_id=u.id)
+                add_coins(a.student_id, 1, f'Step{a.step}通关奖励（复议通过补发）', category='study', operator_id=u.id)
                 bonus_amt += 1
                 if perf_map.get(str(a.step)) and a.step not in (asm.perfect_steps or []):
                     asm.perfect_steps = (asm.perfect_steps or []) + [a.step]
                     stu.total_perfect_steps = (stu.total_perfect_steps or 0) + 1
-                    add_coins(a.student_id, 3, f'Step{a.step}完美通关奖励（附议通过补发）', category='study', operator_id=u.id)
+                    add_coins(a.student_id, 3, f'Step{a.step}完美通关奖励（复议通过补发）', category='study', operator_id=u.id)
                     bonus_amt += 3
                 supp = [x for x in supp if x != a.step]
                 asm.appeal_suppressed = supp
                 perf_map.pop(str(a.step), None)
                 asm.appeal_suppressed_perfect = perf_map
-            # 此步已无待审附议：解除课程重锁（若因本步驳回而上锁）
+            # 此步已无待审复议：解除课程重锁（若因本步驳回而上锁）
             if asm.appeal_locked and not Appeal.query.filter_by(
                     student_id=a.student_id, course_id=a.course_id, step=a.step, status='pending').first():
                 asm.appeal_locked = False
