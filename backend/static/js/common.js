@@ -139,7 +139,31 @@ function renderLogin() {
     </form>
     <p class="center muted">还没有账号？<a href="#/register" style="color:var(--primary)">注册学生号</a></p>
     <p class="center muted" style="font-size:13px">管理员默认账号 admin / admin123</p>
+    <div id="versionFooter" class="version-footer"><span class="muted" style="font-size:12px">系统版本加载中…</span></div>
   </div></div></div>`
+  refreshVersionFooter()
+}
+async function refreshVersionFooter() {
+  try {
+    const r = await fetch('/api/v1/version')
+    if (!r.ok) return
+    const d = await r.json()
+    const box = document.getElementById('versionFooter')
+    if (!box) return
+    let html = `<button class="version-toggle" type="button" onclick="toggleChangelog()">系统版本 ${d.version} ▾</button>`
+    html += `<div id="changelogBox" class="changelog" style="display:none">`
+    ;(d.changelog || []).forEach(c => {
+      html += `<div class="cl-item"><div class="cl-ver">${c.version} · ${c.title}</div><ul>`
+      ;(c.items || []).forEach(it => { html += `<li>${it}</li>` })
+      html += `</ul></div>`
+    })
+    html += `</div>`
+    box.innerHTML = html
+  } catch (e) { /* 忽略：版本信息非关键 */ }
+}
+function toggleChangelog() {
+  const b = document.getElementById('changelogBox')
+  if (b) b.style.display = b.style.display === 'none' ? 'block' : 'none'
 }
 async function loginSubmit(e) {
   e.preventDefault()

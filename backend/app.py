@@ -49,6 +49,50 @@ DEFAULT_SETTINGS = {
     'step_en_hint_changes': 5,     # Step5(中译英) 提示：最多可更换次数（足够多次即可揭示全句）
 }
 
+# ================= 系统版本与升级内容（登录页展示 / 数据兼容性参考） =================
+VERSION = 'v0.7'
+# 每个版本是否影响老数据：全部为非破坏性（仅新增列 / 受控数据重映射），无清库操作。
+# 详见 README「数据兼容性」一节；迁移前 init_db.py 会自动备份数据库。
+CHANGELOG = [
+    {'version': 'v0.7', 'date': '2026-07-31', 'title': '人工附议 + 体验修复',
+     'items': [
+         '新增人工附议：答错自认正确可花 2 金币申请仲裁，管理员人工判对错',
+         '管理员新增「⚖️ 人工附议」独立栏目，待办带角标',
+         '课程管理新增「一键提取所有课程单词」',
+         'Step2 补音效；Step3 加入「跳过看答案」',
+     ]},
+    {'version': 'v0.6', 'date': '2026-07', 'title': 'Step7 分批取词 + 生词表',
+     'items': [
+         'Step7 单词巩固改为分批取词、音汉/英汉交替',
+         '新增生词表，打通单词大师',
+         '发音改用有道 API（禁用浏览器朗读）',
+     ]},
+    {'version': 'v0.5', 'date': '2026-07', 'title': 'Step7 单词巩固',
+     'items': [
+         '新增 Step7 单词巩固、Step4 跟读细化',
+         '单词提取（管理员一键提取实词）、Web Audio 音效',
+     ]},
+    {'version': 'v0.4', 'date': '2026-07', 'title': '步骤重编号 5→6（受控数据迁移）',
+     'items': [
+         '新增「跟读」Step4，形成六步闯关（旧 Step4/5 进度整体 +1 重映射，保留学习含义）',
+         '中译英随机单词提示、移动端登录修复、Step1 体验优化',
+     ]},
+    {'version': 'v0.3', 'date': '2026-07', 'title': 'AI 模型可配置 + 管理 PC 化',
+     'items': [
+         'AI 模型可后台配置（兼容任意 OpenAI Chat 接口）',
+         '管理后台 PC 化布局、系统工具独立入口',
+         '课程音频扫描、金币/商店/许愿跨模块共享',
+     ]},
+    {'version': 'v0.2', 'date': '2026-07', 'title': '融合单词大师',
+     'items': [
+         '单词大师以 Blueprint 并入，统一入口「英语大师」',
+     ]},
+    {'version': 'v0.1', 'date': '2026-06', 'title': '初始发布',
+     'items': [
+         '五步法闯关式英语学习平台',
+     ]},
+]
+
 
 def get_setting(key):
     return SystemSetting.get(key, DEFAULT_SETTINGS.get(key))
@@ -2053,6 +2097,12 @@ def serve_uploads(path):
 # ---------------- 单词大师（独立 Blueprint，挂到主 app） ----------------
 from wordmaster import wordmaster_bp
 app.register_blueprint(wordmaster_bp)
+
+
+# ---------------- 公开：系统版本与升级内容（登录页用，无需登录） ----------------
+@app.route('/api/v1/version', methods=['GET'])
+def api_version():
+    return jsonify(version=VERSION, changelog=CHANGELOG)
 
 
 if __name__ == '__main__':

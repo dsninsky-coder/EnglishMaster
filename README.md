@@ -187,3 +187,37 @@ python app.py                # 监听 http://localhost:5000
 
 ### v0.1
 - 初始发布：五步法闯关式英语学习平台。
+
+## 数据兼容性（升级绝不损害老数据）
+
+每次升级都遵循「**先备份、再迁移**」原则，老项目数据可完整保留、可回退。
+
+### 逐版本影响检查（是否清库 / 是否影响老项目）
+
+| 版本 | 数据库改动 | 是否清库 | 老项目数据影响 |
+|------|-----------|----------|----------------|
+| v0.1 | 首次建表（`db.create_all`） | 否（新库） | 无既有数据 |
+| v0.2 | 新增单词大师 4 表；`wishes` 加 `title/desc/is_public/lit/pledges/source`；`shop_items` 加 `product_type`；种子内置免错券 | 否 | 仅新增列（可空），老数据原样保留 |
+| v0.3 | `coin_transactions` 加 `category/operator_id`；`purchase_orders` 加 `shipped_at/completed_at/reject_reason`；`users` 加 `last_task_date`；`wishes` 加扩展字段 | 否 | 仅新增列，老数据原样保留 |
+| v0.4 | **受控数据迁移**：插入「跟读」Step4，旧 `Step4/5` 进度整体 +1 重映射；`sentences` 表 `audio_url` 改可空（建新表→拷数据→删旧表→改名） | 否 | 进度语义重映射但保留学习含义，无丢失 |
+| v0.5 | `course_assignments` 加 `step_7_unlocked`；新增 `course_words` 等表 | 否 | 仅新增列/表，老数据原样保留 |
+| v0.6 | 无 schema 改动（逻辑/UI 调整） | 否 | 不影响 |
+| v0.7 | `course_assignments` 加 `appeal_locked/appeal_suppressed/appeal_suppressed_perfect`；新增 `appeals` 表 | 否 | 仅新增列/表，老数据原样保留 |
+
+**结论**：没有任何版本清空数据库。所有改动均为 `ALTER TABLE ADD COLUMN`（新增可空列，数据原样保留）或受控的数据重映射（v0.4 步骤重编号，保留学习含义）。`db.create_all()` 只建缺失表、绝不丢弃已有表。
+
+### 升级安全机制（`backend/init_db.py`）
+
+- **自动备份**：每次运行 `python init_db.py`（`migrate` 前）会自动把 `instance/english.db` 复制为 `backend/backups/english.db.bak.<UTC时间戳>.db`，并写入同名 `.meta.json`（含备份时间、来源、版本）。同日重复运行仅刷新 `english.db.bak.latest`，避免堆积。
+- **恢复命令**：若迁移中途失败或发现新问题，可人工恢复：
+  ```bash
+  python init_db.py --restore backend/backups/english.db.bak.latest
+  ```
+- **仅备份 / 跳过备份**：
+  ```bash
+  python init_db.py --backup            # 仅备份后退出
+  python init_db.py --no-backup         # 迁移前不自动备份（不推荐）
+  ```
+- **处理冲突的流程**：若未来某版本确需破坏性结构变更，按「先备份老数据 → 建新表 → 读备份把老数据填入新表 → 新版本运行观察 → 确认无问题再人工删除 `backups/` 下的旧备份」执行。`backups/` 已被 `.gitignore` 排除，不会随仓库发布。
+
+> 注：登录页底部已展示当前系统版本（如 `v0.7`）与历次升级内容，点击可展开查看。

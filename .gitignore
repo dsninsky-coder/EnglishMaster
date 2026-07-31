@@ -14,6 +14,8 @@ envs/
 *.sqlite
 *.sqlite3
 backend/instance/
+# 升级前自动备份（含真实数据副本，绝不发布）
+backend/backups/
 
 # ── Project internal memory (do not publish) ──
 .workbuddy/

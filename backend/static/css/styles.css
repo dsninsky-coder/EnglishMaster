@@ -230,6 +230,24 @@ table.tbl td.ops .btn { margin: 2px 2px; }
 }
 .auth-inner { margin: auto; width: 100%; max-width: 420px; }
 
+/* 登录页底部：系统版本 + 升级内容 */
+.version-footer { margin-top: 22px; text-align: center; }
+.version-toggle {
+  background: none; border: none; color: var(--text-dim); font-size: 12px;
+  cursor: pointer; padding: 4px 8px; text-decoration: underline; font-family: inherit;
+}
+.version-toggle:hover { color: var(--primary); }
+.changelog {
+  margin-top: 10px; text-align: left; max-height: 240px; overflow-y: auto;
+  background: var(--bg-soft, #f5f6f8); border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--text-dim);
+}
+.changelog .cl-item { margin-bottom: 10px; }
+.changelog .cl-item:last-child { margin-bottom: 0; }
+.changelog .cl-ver { font-weight: 600; color: var(--text, #222); margin-bottom: 2px; }
+.changelog .cl-item ul { margin: 2px 0 0; padding-left: 18px; }
+.changelog .cl-item li { margin: 1px 0; line-height: 1.5; }
+
 /* Step1 / Step3 倍速播放按钮组（替代 <select>，兼容个别设备） */
 .rate-btns { display: flex; flex-wrap: wrap; gap: 8px; }
 .rate-btns .btn { flex: 0 0 auto; min-width: 56px; }

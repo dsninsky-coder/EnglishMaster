@@ -8,15 +8,66 @@
 import os
 import sys
 import json
+import shutil
 import argparse
+from datetime import datetime, timezone
 from sqlalchemy import text
 
-from app import app, db
+from app import app, db, DB_PATH, VERSION
 import models
 from models import User, Course, Sentence, SystemSetting
 
 DEFAULT_ADMIN = 'admin'
 DEFAULT_PASSWORD = 'admin123'
+
+# 迁移前自动备份目录（独立于 instance/，避免被 .gitignore 误删时连同真实库丢失）
+BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
+
+
+def backup_database():
+    """迁移前自动备份当前数据库，返回备份文件路径；无库或空库则返回 None。
+
+    设计目标：任何升级都先备份老数据，再改动表结构；若迁移中途失败（如 sentences
+    表 DROP 后 RENAME 前崩溃），可用 --restore 从备份完整恢复，绝不损害老数据。
+    备份保留至人工确认新版本无问题后手动删除。
+    """
+    if not os.path.exists(DB_PATH) or os.path.getsize(DB_PATH) == 0:
+        return None
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    # 同日已备份则不再重复生成时间戳副本（避免 init_db 反复运行产生大量备份），
+    # 但仍刷新 english.db.bak.latest 作为最近一次迁移前快照。
+    today = datetime.now(timezone.utc).strftime('%Y%m%d')
+    existing = [f for f in os.listdir(BACKUP_DIR)
+                if f.startswith(f'english.db.bak.{today}') and f.endswith('.db')]
+    latest = os.path.join(BACKUP_DIR, 'english.db.bak.latest')
+    shutil.copy2(DB_PATH, latest)
+    if existing:
+        print(f'[备份] 今日已备份，已刷新最新副本：{latest}')
+        return os.path.join(BACKUP_DIR, existing[0])
+    ts = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    bak = os.path.join(BACKUP_DIR, f'english.db.bak.{ts}.db')
+    shutil.copy2(DB_PATH, bak)
+    meta = {
+        'backup_at': ts,
+        'source': DB_PATH,
+        'app_version': VERSION,
+        'note': '升级前自动备份；确认新版本无问题后可手动删除本文件及其 .meta.json',
+    }
+    with open(bak + '.meta.json', 'w', encoding='utf-8') as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    print(f'[备份] 已备份数据库到：{bak}')
+    return bak
+
+
+def restore_database(backup_path):
+    """从指定备份恢复数据库（紧急恢复用，需人工调用）。"""
+    if not os.path.exists(backup_path):
+        print(f'[恢复] 备份文件不存在：{backup_path}')
+        return False
+    shutil.copy2(backup_path, DB_PATH)
+    print(f'[恢复] 已从 {backup_path} 恢复数据库：{DB_PATH}')
+    return True
+
 
 
 def migrate():
@@ -254,9 +305,22 @@ def seed_demo():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', action='store_true', help='灌入 demo 课程')
+    parser.add_argument('--no-backup', action='store_true', help='迁移前不自动备份数据库')
+    parser.add_argument('--backup', action='store_true', help='仅备份数据库后退出（不迁移）')
+    parser.add_argument('--restore', metavar='PATH', help='从指定备份恢复数据库后退出')
     args = parser.parse_args()
 
+    if args.restore:
+        ok = restore_database(args.restore)
+        sys.exit(0 if ok else 1)
+    if args.backup:
+        b = backup_database()
+        sys.exit(0 if b else 1)
+
     with app.app_context():
+        # 升级前先备份老数据（除非显式 --no-backup）
+        if not args.no_backup:
+            backup_database()
         db.create_all()
         migrate()
         # 创建默认管理员
