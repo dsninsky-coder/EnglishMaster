@@ -50,10 +50,14 @@ DEFAULT_SETTINGS = {
 }
 
 # ================= 系统版本与升级内容（登录页展示 / 数据兼容性参考） =================
-VERSION = 'v0.7.3'
+VERSION = 'v0.7.4'
 # 每个版本是否影响老数据：全部为非破坏性（仅新增列 / 受控数据重映射），无清库操作。
 # 详见 README「数据兼容性」一节；迁移前 init_db.py 会自动备份数据库。
 CHANGELOG = [
+    {'version': 'v0.7.4', 'date': '2026-07-31', 'title': '修复 v0.2→最新 升级迁移崩溃（续）',
+     'items': [
+         '修复 init_db.py 迁移顺序：step_7_unlocked / 人工复议 appeal_* 列原在 CourseAssignment ORM 查询之后才补齐，导致 ORM SELECT 报 no such column: step_7_unlocked；现改为在 ORM 查询前补齐本表全部列',
+     ]},
     {'version': 'v0.7.3', 'date': '2026-07-31', 'title': '修复 v0.2→最新 升级迁移崩溃',
      'items': [
          '修复 init_db.py 步骤重编号迁移：原 "UPDATE step=step+1 WHERE step>=4" 在 (student_id,sentence_id,step) 唯一约束下会撞键崩溃；改为从大到小逐档 +1，避免中间态冲突',

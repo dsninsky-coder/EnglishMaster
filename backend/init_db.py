@@ -187,6 +187,29 @@ def migrate():
             db.session.execute(text("ALTER TABLE course_assignments ADD COLUMN unlock_mode VARCHAR(16) DEFAULT 'free'"))
             db.session.commit()
             print('已为 course_assignments 增加 unlock_mode 列。')
+        # course_assignments: v0.5 新增 step_7_unlocked（单词巩固 Step7）
+        # 注意：必须在下方「v0.4 步骤重编号」的 ORM 查询（CourseAssignment.query.all）
+        # 之前补齐本表所有列，否则 ORM 生成的 SELECT 会因缺列而报 no such column。
+        acols7 = [r[1] for r in db.session.execute(
+            text("PRAGMA table_info(course_assignments)")).fetchall()]
+        if 'step_7_unlocked' not in acols7:
+            db.session.execute(text(
+                "ALTER TABLE course_assignments ADD COLUMN step_7_unlocked BOOLEAN DEFAULT 0"))
+            db.session.commit()
+            print('已为 course_assignments 增加 step_7_unlocked 列。')
+        # course_assignments: 增加人工复议相关列（appeal_locked / appeal_suppressed / appeal_suppressed_perfect）
+        aacols = [r[1] for r in db.session.execute(
+            text("PRAGMA table_info(course_assignments)")).fetchall()]
+        for col, ctype in [
+            ('appeal_locked', 'BOOLEAN'),
+            ('appeal_suppressed', 'JSON'),
+            ('appeal_suppressed_perfect', 'JSON'),
+        ]:
+            if col not in aacols:
+                db.session.execute(text(
+                    f"ALTER TABLE course_assignments ADD COLUMN {col} {ctype}"))
+                db.session.commit()
+                print(f'已为 course_assignments 增加 {col} 列。')
         # users: 增加 allow_skip（允许一轮后强制解锁下一步）
         if 'allow_skip' not in ucols:
             db.session.execute(text("ALTER TABLE users ADD COLUMN allow_skip BOOLEAN DEFAULT 0"))
@@ -252,29 +275,9 @@ def migrate():
             db.session.add(SystemSetting(key='migrated_step6', value=json.dumps(True)))
             db.session.commit()
             print('已完成步骤重编号数据迁移（插入跟读 Step4）。')
-        # ---- v0.5 新增 Step7 单词巩固：course_assignments 增加 step_7_unlocked 列 ----
-        # （course_words 表由 main() 中的 db.create_all() 自动建表；此处仅补列，幂等）
-        acols7 = [r[1] for r in db.session.execute(
-            text("PRAGMA table_info(course_assignments)")).fetchall()]
-        if 'step_7_unlocked' not in acols7:
-            db.session.execute(text(
-                "ALTER TABLE course_assignments ADD COLUMN step_7_unlocked BOOLEAN DEFAULT 0"))
-            db.session.commit()
-            print('已为 course_assignments 增加 step_7_unlocked 列。')
+        # ---- v0.5 step_7_unlocked 与人工复议 appeal_* 列已在上方「unlock_mode 列」之后补齐 ----
+        # （保证在下方 CourseAssignment ORM 查询前所有列已存在，避免 no such column）
         # db.create_all() 已建单词大师新表（word_lists / words / word_user_states / word_exam_configs）
-        # course_assignments: 增加人工复议相关列（appeal_locked / appeal_suppressed / appeal_suppressed_perfect）
-        aacols = [r[1] for r in db.session.execute(
-            text("PRAGMA table_info(course_assignments)")).fetchall()]
-        for col, ctype in [
-            ('appeal_locked', 'BOOLEAN'),
-            ('appeal_suppressed', 'JSON'),
-            ('appeal_suppressed_perfect', 'JSON'),
-        ]:
-            if col not in aacols:
-                db.session.execute(text(
-                    f"ALTER TABLE course_assignments ADD COLUMN {col} {ctype}"))
-                db.session.commit()
-                print(f'已为 course_assignments 增加 {col} 列。')
         # appeals 表由 db.create_all() 自动建表（新增模型，无需手动迁移）
 
 
@@ -322,6 +325,9 @@ def main():
         sys.exit(0 if b else 1)
 
     with app.app_context():
+        if not args.no_backup:
+            backup_database()
+        db.create_all()
         # 升级前先备份老数据（除非显式 --no-backup）
         if not args.no_backup:
             backup_database()
