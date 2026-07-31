@@ -10,6 +10,7 @@ import io
 import json
 import datetime
 import re
+import random
 
 from flask import Flask, request, jsonify, send_from_directory, render_template, session
 from flask_cors import CORS
@@ -21,7 +22,7 @@ from sqlalchemy import func, distinct
 import models
 from models import db, User, AdminShareKey, Course, Sentence, CourseAssignment, \
     StudentSentenceProgress, WrongAnswer, CoinTransaction, ShopItem, PurchaseOrder, \
-    Wish, WishSupport, SystemSetting
+    Wish, WishSupport, SystemSetting, CourseWord
 import deepseek_client as ds
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -32,10 +33,10 @@ os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 os.makedirs(COURSE_UPLOAD_DIR, exist_ok=True)
 
 # 各步通过阈值
-# 步骤阈值（重编号后：1=沉浸 2=英译中 3=听音写中文 4=跟读 5=中译英 6=续写）
-STEP_THRESHOLDS = {1: 0.0, 2: 0.85, 3: 0.80, 4: 0.0, 5: 0.80, 6: 0.70}
-# 评分步骤（发放通关/完美金币）：跟读(4)与沉浸(1)为非评分练习步骤
-SCORED_STEPS = {2, 3, 5, 6}
+# 步骤阈值（v0.5：1=沉浸 2=英译中 3=听音写中文 4=跟读 5=中译英 6=续写 7=单词巩固）
+STEP_THRESHOLDS = {1: 0.0, 2: 0.85, 3: 0.80, 4: 0.0, 5: 0.80, 6: 0.70, 7: 0.70}
+# 评分步骤（发放通关/完美金币）：跟读(4)与沉浸(1)为非评分练习步骤；单词巩固(7)为评分步骤
+SCORED_STEPS = {2, 3, 5, 6, 7}
 
 # 系统配置默认值（可在 /admin/settings 后台修改）
 DEFAULT_SETTINGS = {
@@ -170,6 +171,47 @@ def record_wrong(student_id, sentence_id, step, user_input, correct_answer, erro
     db.session.add(WrongAnswer(
         student_id=student_id, sentence_id=sentence_id, step=step,
         user_input=user_input, correct_answer=correct_answer, error_type=error_type))
+
+
+# ---------------- 课程单词提取（v0.5 Step7 单词巩固） ----------------
+# 英语虚词（功能词）集合：提取单词时去除这些，只保留名词/动词/形容词/副词等实词。
+# 覆盖：冠词、代词、介词、连词、助动词、限定词、否定词、疑问词、常见副词小品词等。
+EN_STOPWORDS = set("""
+a an the and or but if then else when while because since although though however
+for to of in on at by with from into onto upon about over under between among across
+after before during within without through against along around near off up down out
+inside outside beneath below behind beyond above under until till as be am is are
+was were been being do does did done have has had having will would shall should can
+could may might must ought need dare i me my we us our you your he him his she her
+they them their it its this that these those who whom whose which what whatever
+whoever each every either neither another any some such both all most other several
+many much few little no not nor so than too very just only also even still yet again
+once here there where why how
+""".split())
+
+
+def extract_course_words(course):
+    """从课程所有句子的英文文本中提取实词（去虚词、去重、小写、按字母序）。
+
+    仅作一次性提取存入 course_words 表；学生测试时直接读表，不实时提取。
+    """
+    seen = set()
+    words = []
+    sents = Sentence.query.filter_by(course_id=course.id).order_by(Sentence.sentence_order).all()
+    for s in sents:
+        toks = re.findall(r"[A-Za-z']+", s.english or '')
+        for t in toks:
+            tl = t.lower().strip("'")
+            if len(tl) <= 1:
+                continue
+            if tl in EN_STOPWORDS:
+                continue
+            if tl in seen:
+                continue
+            seen.add(tl)
+            words.append(tl)
+    words.sort()
+    return words
 
 
 # ---------------- 鉴权 ----------------
@@ -354,7 +396,8 @@ def my_courses():
                 'step_unlocks': {
                 '1': a.step_1_unlocked, '2': a.step_2_unlocked,
                 '3': a.step_3_unlocked, '4': a.step_4_unlocked,
-                '5': a.step_5_unlocked, '6': a.step_6_unlocked},
+                '5': a.step_5_unlocked, '6': a.step_6_unlocked,
+                '7': a.step_7_unlocked},
             'completed_steps': a.completed_steps,
             'is_completed': a.is_completed,
             'unlock_mode': a.unlock_mode or 'free',
@@ -407,6 +450,60 @@ def serialize_sentence(s):
         'svo': s.svo or [],
         'chinese_keywords': s.chinese_keywords or [],
     }
+
+
+@app.route('/api/v1/courses/<int:course_id>/words', methods=['GET'])
+@jwt_required()
+def course_words(course_id):
+    """返回该课程单词库的乱序单词列表（学生做题时直接读取，不实时提取）。"""
+    words = CourseWord.query.filter_by(course_id=course_id).all()
+    wlist = [w.word for w in words]
+    random.shuffle(wlist)
+    return jsonify(words=wlist, total=len(wlist))
+
+
+@app.route('/api/v1/step/word-judge', methods=['POST'])
+@jwt_required()
+def word_judge():
+    """Step7 单词巩固：用 AI 判断学生中文翻译是否正确。
+
+    返回 {correct: bool, reason: str}：
+    - 正确：correct=true，reason 为空；
+    - 错误：correct=false，reason 为 AI 用一句话简要说明的错误原因（前端在解析界面展示）。
+    未配置 AI 时 correct=null 并给出提示（前端不计入正确率、引导配置）。
+    """
+    u = current_user()
+    data = request.get_json(silent=True) or {}
+    word = (data.get('word') or '').strip()
+    answer = (data.get('answer') or '').strip()
+    if not word or not answer:
+        return jsonify(correct=False, reason='请填写单词与你的翻译')
+    key = resolve_api_key(u)
+    proxy = get_ai_proxy()
+    if not key:
+        return jsonify(correct=None,
+                       reason='未配置 AI 模型（请在管理员设置中填写 API Key 与模型），暂时无法自动判分')
+    messages = [
+        {"role": "system", "content": (
+            "你是严谨的英语老师。给定一个英文单词和学生的中文翻译，判断翻译是否正确。"
+            "如果正确，reason 填空字符串；如果错误，用一句简短中文（不超过30字）点明主要问题，语气温和。"
+            "只输出 JSON：{\"correct\": true/false, \"reason\": \"...\"}。"
+        )},
+        {"role": "user", "content": json.dumps(
+            {"word": word, "student_translation": answer}, ensure_ascii=False)},
+    ]
+    content = ds._chat(key, messages, base_url=proxy['base_url'], model=proxy['model'])
+    if not content:
+        return jsonify(correct=None, reason='AI 服务暂时不可用，请稍后再试')
+    try:
+        obj, err = extract_json(content)
+        if obj is None:
+            return jsonify(correct=None, reason='AI 返回无法解析')
+        correct = bool(obj.get('correct', False))
+        reason = (obj.get('reason') or '').strip()
+        return jsonify(correct=correct, reason=reason)
+    except Exception:
+        return jsonify(correct=None, reason='AI 返回解析失败')
 
 
 # ---------------- 闯关提交 ----------------
@@ -594,12 +691,12 @@ def step_finish():
                 add_coins(u.id, 3, f'Step{step}完美通关奖励', category='study')
                 awards.append('完美通关 +3')
         # 解锁下一步
-        if step < 6:
+        if step < 7:
             setattr(a, f'step_{step+1}_unlocked', True)
             a.current_step = max(a.current_step or 1, step + 1)
             unlocked_next = True
         # 全部通关：标记完成（不再发"课程全通"额外奖励，每个步骤已奖励过）
-        if set(a.completed_steps or []) >= {2, 3, 5, 6}:
+        if set(a.completed_steps or []) >= {2, 3, 5, 6, 7}:
             a.is_completed = True
     db.session.commit()
     return jsonify(passed=True, forced=forced, unlocked_next=unlocked_next,
@@ -1566,6 +1663,60 @@ def admin_course_errors(course_id):
     return jsonify(course_id=course_id, title=c.title, total=len(sents),
                    missing_audio=missing_audio, missing_fields=missing_fields,
                    has_error=(len(missing_fields) > 0))
+
+
+# ---------------- 课程单词库管理（v0.5 Step7 单词巩固） ----------------
+@app.route('/api/v1/admin/course/<int:course_id>/extract-words', methods=['POST'])
+@admin_only
+def admin_extract_words(course_id):
+    """一键提取课程实词并存入 course_words（保留管理员手动添加的词）。"""
+    c = Course.query.get_or_404(course_id)
+    words = extract_course_words(c)
+    # 保留手动添加的词，避免被覆盖
+    custom = {w.word for w in CourseWord.query.filter_by(course_id=course_id, is_custom=True)}
+    CourseWord.query.filter_by(course_id=course_id, is_custom=False).delete()
+    for w in words:
+        if w in custom:
+            continue
+        db.session.add(CourseWord(course_id=course_id, word=w, is_custom=False))
+    db.session.commit()
+    out = CourseWord.query.filter_by(course_id=course_id).order_by(CourseWord.word).all()
+    return jsonify(message='已提取并保存单词', count=len(out),
+                   words=[{'id': w.id, 'word': w.word, 'is_custom': w.is_custom} for w in out])
+
+
+@app.route('/api/v1/admin/course/<int:course_id>/words', methods=['GET'])
+@admin_only
+def admin_list_words(course_id):
+    Course.query.get_or_404(course_id)
+    out = CourseWord.query.filter_by(course_id=course_id).order_by(CourseWord.word).all()
+    return jsonify(words=[{'id': w.id, 'word': w.word, 'is_custom': w.is_custom} for w in out])
+
+
+@app.route('/api/v1/admin/course/<int:course_id>/word', methods=['POST'])
+@admin_only
+def admin_add_word(course_id):
+    Course.query.get_or_404(course_id)
+    word = ((request.get_json(silent=True) or {}).get('word') or '').strip().lower()
+    if not word:
+        return jsonify(error='单词不能为空'), 400
+    if CourseWord.query.filter_by(course_id=course_id, word=word).first():
+        return jsonify(error='单词已存在'), 400
+    w = CourseWord(course_id=course_id, word=word, is_custom=True)
+    db.session.add(w)
+    db.session.commit()
+    return jsonify(message='已添加单词', id=w.id, word=w.word, is_custom=True)
+
+
+@app.route('/api/v1/admin/course/<int:course_id>/word/<int:word_id>', methods=['DELETE'])
+@admin_only
+def admin_delete_word(course_id, word_id):
+    w = CourseWord.query.get_or_404(word_id)
+    if w.course_id != course_id:
+        return jsonify(error='单词与课程不匹配'), 400
+    db.session.delete(w)
+    db.session.commit()
+    return jsonify(message='已删除单词')
 
 
 @app.route('/api/v1/admin/unpublish-course', methods=['POST'])

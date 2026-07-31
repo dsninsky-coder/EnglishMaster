@@ -89,6 +89,7 @@ class CourseAssignment(db.Model):
     step_4_unlocked = db.Column(db.Boolean, default=False)
     step_5_unlocked = db.Column(db.Boolean, default=False)
     step_6_unlocked = db.Column(db.Boolean, default=False)
+    step_7_unlocked = db.Column(db.Boolean, default=False)  # 单词巩固（v0.5 新增）
     is_completed = db.Column(db.Boolean, default=False)
     # 奖励追踪
     completed_steps = db.Column(db.JSON, default=list)      # [2,3,...]
@@ -98,6 +99,23 @@ class CourseAssignment(db.Model):
     unlock_mode = db.Column(db.String(16), default='free')
 
     __table_args__ = (db.UniqueConstraint('student_id', 'course_id', name='uq_assignment'),)
+
+
+class CourseWord(db.Model):
+    """课程单词库（v0.5 单词巩固 Step7）。
+
+    - 管理员在课程管理界面「一键提取」后存入，仅保留实词（去虚词）；
+    - is_custom=True 表示管理员手动添加（重新提取不会删掉它）；
+    - 学生做题时直接从本表读取，不实时提取，提升效率。
+    """
+    __tablename__ = 'course_words'
+    id = db.Column(db.Integer, primary_key=True)
+    course_id = db.Column(db.Integer, db.ForeignKey('courses.id'), nullable=False, index=True)
+    word = db.Column(db.String(80), nullable=False)
+    is_custom = db.Column(db.Boolean, default=False)   # 管理员手动添加
+    created_at = db.Column(db.DateTime, default=utcnow)
+
+    __table_args__ = (db.UniqueConstraint('course_id', 'word', name='uq_course_word'),)
 
 
 class StudentSentenceProgress(db.Model):

@@ -50,7 +50,7 @@ async function renderListenHome() {
     else coursesHtml = cs.map(c => {
       const status = c.status || (c.is_completed ? 'review' : 'start')
       const cur = c.current_step || 1
-      const pct = Math.round(((c.completed_steps || []).length / 6) * 100)
+      const pct = Math.round(((c.completed_steps || []).length / 7) * 100)
       let badge = '', btn
       if (status === 'locked') {
         badge = '<span class="tag danger">🔒 未解锁</span>'
@@ -174,18 +174,21 @@ async function renderLearn(courseId) {
     curSentIdx: -1, passNo: 1, hadRedo: false,
     allowSkip: !!(cr.ok && cr.data.allow_skip),   // 该生是否被管理员允许"强制解锁下一步"
     enHint: r.data.en_hint || { words: 3, changes: 5 },  // 中译英提示配置（管理员后台设置）
+    words: [], wordResults: [], wordIdx: 0,   // Step7 单词巩固状态
   }
   drawLearn()
 }
 
+const STEP_NAMES = {0: '词汇', 1: '沉浸', 2: '英译中', 3: '听音', 4: '跟读', 5: '中译英', 6: '续写', 7: '单词'}
+
 function drawLearn() {
   const total = learn.sentences.length
   const unlocks = learn.unlocks
-  const stepsHtml = [0, 1, 2, 3, 4, 5, 6].map(n => {
+  const stepsHtml = [0, 1, 2, 3, 4, 5, 6, 7].map(n => {
     if (n === 0) return `<div class="step-pill ${learn.step === 0 ? 'active' : ''}" onclick="goStep(0)">词汇</div>`
     const locked = !unlocks[String(n)]
     const cls = learn.step === n ? 'active' : (locked ? 'locked' : 'done')
-    return `<div class="step-pill ${cls}" ${locked ? '' : `onclick="goStep(${n})"`}>${locked ? '🔒 ' : ''}Step ${n}</div>`
+    return `<div class="step-pill ${cls}" ${locked ? '' : `onclick="goStep(${n})"`}>${locked ? '🔒 ' : ''}Step ${n} · ${STEP_NAMES[n]}</div>`
   }).join('')
   el('app').innerHTML = studentFrame(`
     <div class="card">
@@ -225,6 +228,7 @@ function drawStepBody() {
   const body = el('step-body')
   if (learn.step === 0) return drawStep0(body)
   if (learn.step === 1) return drawStep1(body)
+  if (learn.step === 7) return drawStep7(body)
   return drawStepN(body)
 }
 
@@ -285,6 +289,7 @@ function nextStep1() {
 /* Step 2~5：答题步骤（做错反复重练，直到全部做对才解锁） */
 function drawStepN(body) {
   const step = learn.step
+  if (step === 7) return drawStep7(body)
   // 进入本步时初始化练习队列
   if (learn.queueStep !== step || !learn.queue) {
     learn.queueStep = step
@@ -367,7 +372,7 @@ function drawStepN(body) {
   </div>`
 }
 
-/* Step4 跟读：听录音，模仿语音语调大声跟读 */
+/* Step4 跟读：屏幕上显示英文原文，学生用语音（或键盘）输入英文原文，本地逐字对比 */
 function drawFollow(body, s) {
   const tw = s.target_words || []
   const hasAudio = !!s.audio_url
@@ -378,15 +383,71 @@ function drawFollow(body, s) {
       <span class="muted">第 ${learn.idx + 1}/${totalQ} 句 · Step 4 跟读</span>
       <button class="btn ghost sm" onclick="backToSteps()">← 步骤</button>
     </div>
-    <div class="cn" style="margin-top:10px">${esc(s.chinese)}</div>
-    <div class="sentence" style="margin-top:8px">${hl(s.english, tw)}</div>
-    ${hasAudio ? `<div class="rate-btns" style="margin-top:12px">${rateButtons(s.audio_url)}</div>` : '<div class="muted" style="margin-top:12px">无音频，请直接跟读</div>'}
-    <div class="req-hint">学习要求：先听录音，模仿语音语调大声跟读这句英文；可多听几遍直到流利。</div>
+    <div class="sentence" style="margin-top:10px">${hl(s.english, tw)}</div>
+    <div class="muted" style="margin-top:6px">${esc(s.chinese)}</div>
+    ${hasAudio ? `<div class="rate-btns" style="margin-top:10px"><button class="btn ghost sm aud-btn" data-label="🔊 听原音" onclick="playAudio('${esc(s.audio_url)}', 1, this)">🔊 听原音</button></div>` : ''}
+    <div class="req-hint">学习要求：看着英文原文，用麦克风跟读这句（或直接在下方输入）。系统会逐字对比你的输入与原句（不区分大小写）。读错了会显示原句并播放原音。</div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn ghost" style="flex:1" onclick="startFollowRecognition('foll_${s.id}')">🎤 开始跟读</button>
+    </div>
+    <textarea id="foll_${s.id}" rows="2" placeholder="点「开始跟读」用语音输入，或直接打字输入英文原文" style="margin-top:10px"></textarea>
+    <button class="btn block" style="margin-top:10px" onclick="submitFollow('foll_${s.id}', ${s.id})">提交对比</button>
+    <div id="fb"></div>
     <div class="row" style="margin-top:12px">
       ${learn.idx > 0 ? `<button class="btn ghost" style="flex:1" onclick="prevStepN()">← 上一句</button>` : '<span style="flex:1"></span>'}
       <button class="btn" style="flex:1" onclick="nextStepN()">${isLast ? '完成跟读 →' : '下一句 →'}</button>
     </div>
   </div>`
+}
+
+function normFollow(t) {
+  return (t || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim()
+}
+function compareFollow(student, original) {
+  const a = normFollow(student), b = normFollow(original)
+  if (a === b) return { passed: true, ratio: 1, html: esc(original) }
+  const arrA = a.split(''), arrB = b.split('')
+  const n = Math.max(arrA.length, arrB.length)
+  let match = 0, html = ''
+  for (let i = 0; i < n; i++) {
+    const ca = arrA[i], cb = arrB[i]
+    if (ca !== undefined && ca === cb) { match++; html += `<span class="cm">${esc(cb)}</span>` }
+    else { html += `<span class="cw">${esc(cb === undefined ? '·' : cb)}</span>` }
+  }
+  const ratio = n ? match / n : 0
+  return { passed: ratio >= 0.9, ratio, html }
+}
+function startFollowRecognition(taId) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+  if (!SR) { toast('当前浏览器不支持语音识别，请直接打字输入', true); return }
+  if (window.__followRec) { try { window.__followRec.stop() } catch (e) {} return }
+  const rec = new SR()
+  rec.lang = 'en-US'; rec.interimResults = false; rec.maxAlternatives = 1
+  const ta = el(taId)
+  rec.onresult = (e) => { if (ta) ta.value = e.results[0][0].transcript; toast('语音已识别，可点「提交对比」') }
+  rec.onerror = (e) => { toast('语音识别失败：' + (e.error || '') + '，请直接打字', true); window.__followRec = null }
+  rec.onend = () => { window.__followRec = null }
+  window.__followRec = { stop: () => { try { rec.stop() } catch (e) {}; window.__followRec = null } }
+  try { rec.start() } catch (e) { toast('无法启动语音，请直接打字', true); window.__followRec = null }
+}
+function submitFollow(taId, sentenceId) {
+  const s = learn.sentences[learn.curSentIdx]
+  const ta = el(taId)
+  if (!ta || !ta.value.trim()) { toast('请先输入或语音跟读', true); return }
+  const res = compareFollow(ta.value, s.english)
+  const fb = el('fb')
+  if (res.passed) {
+    playTone('ok')
+    fb.innerHTML = `<div class="feedback ok">✅ 跟读正确！（匹配度 ${Math.round(res.ratio * 100)}%）</div>`
+  } else {
+    playTone('err')
+    const audioBtn = s.audio_url
+      ? `<button class="btn ghost sm aud-btn" style="margin-top:8px" data-label="🔊 听原音" onclick="playAudio('${esc(s.audio_url)}', 1, this)">🔊 听原音</button>` : ''
+    fb.innerHTML = `<div class="feedback retry">🙂 跟读有偏差，对照一下原句（绿=对，红=错）：<br/>
+      <div class="sentence" style="margin-top:6px">${res.html}</div>
+      <div class="muted" style="margin-top:6px">你的输入：${esc(ta.value)}</div>${audioBtn}</div>`
+    if (s.audio_url) playAudio(s.audio_url, 1, null)
+  }
 }
 function nextStepN() {
   learn.idx++
@@ -414,7 +475,7 @@ function changeEnHint() {
 function stepHint(step) {
   if (step === 2) return '学习要求：将上面的英语句子翻译为中文。'
   if (step === 3) return '学习要求：讲听到的英语句子的中文意思写出来。如果不会了，请回到步骤1。'
-  if (step === 4) return '学习要求：先听录音，模仿语音语调大声跟读这句英文，强化语音输入。'
+  if (step === 4) return '学习要求：看着英文原文，用麦克风跟读或用键盘输入这句英文，系统会逐字对比。'
   if (step === 5) return '学习要求：把上面的中文句子翻译成英文（可用「换一批提示」逐步揭示单词）。'
   if (step === 6) return '学习要求：根据上文学写出连贯的下一句英文。'
   return ''
@@ -441,6 +502,145 @@ async function submitStepN(sentenceId, step) {
   const lastOfPass = learn.idx + 1 >= learn.queue.length
   fb.innerHTML = `<div class="feedback ${cls}">${head}${extra}</div>
     <button class="btn block" style="margin-top:10px" onclick="afterStepSubmit()">${lastOfPass ? '本轮结束 →' : '下一句 →'}</button>`
+}
+
+/* ============ Step7 单词巩固（v0.5） ============ */
+const WORD_PER_ROUND = 10
+async function drawStep7(body) {
+  if (!learn.words || !learn.words.length) {
+    const r = await api(`/courses/${learn.courseId}/words`)
+    if (!r.ok) {
+      body.innerHTML = `<div class="card empty">${esc(r.data.error || '单词库为空，请管理员先提取单词')}</div>`
+      return
+    }
+    learn.words = r.data.words || []
+    learn.wordResults = []
+    learn.wordIdx = 0
+  }
+  if (!learn.words.length) {
+    body.innerHTML = `<div class="card center"><h3>本课暂无单词</h3>
+      <p class="muted">请管理员在课程管理中点「提取单词」生成单词库。</p>
+      <button class="btn" style="margin-top:12px" onclick="backToSteps()">返回步骤</button></div>`
+    return
+  }
+  const pool = learn.words.slice()
+  const pick = shuffle(pool).slice(0, Math.min(WORD_PER_ROUND, pool.length))
+  const half = Math.ceil(pick.length / 2)
+  const items = pick.map((w, i) => ({ word: w, mode: i < half ? 'en2zh' : 'audio2zh',
+    answered: false, correct: null, reason: '' }))
+  learn.wordItems = items
+  const cards = items.map((it, i) => {
+    const head = it.mode === 'en2zh'
+      ? `<div class="word-en">${esc(it.word)}</div>`
+      : `<div class="word-audio">
+           <button class="btn ghost sm" onclick="speakWord('${esc(it.word)}','en-US')">🇺🇸 美音</button>
+           <button class="btn ghost sm" onclick="speakWord('${esc(it.word)}','en-GB')">🇬🇧 英音</button>
+           <span class="muted">（听发音，写出中文意思）</span>
+         </div>`
+    return `<div class="word-card" id="wc_${i}">
+      <div class="spread"><span class="muted">第 ${i + 1}/${items.length} 词 · ${it.mode === 'en2zh' ? '英译中' : '音译中'}</span></div>
+      ${head}
+      <input id="wa_${i}" class="word-input" placeholder="写出中文意思" />
+      <button class="btn ghost sm" style="margin-top:8px" onclick="judgeWord(${i})">判断</button>
+      <div id="wr_${i}"></div>
+    </div>`
+  }).join('')
+  body.innerHTML = `<div class="card">
+    <div class="spread"><h3>Step 7 · 单词巩固</h3><button class="btn ghost sm" onclick="backToSteps()">← 步骤</button></div>
+    <p class="muted">从本课单词库随机抽 ${items.length} 个词：前 ${half} 个看英文写意思，后 ${items.length - half} 个听发音写意思。每词判断后可看解析。</p>
+    ${cards}
+    <button class="btn block" style="margin-top:16px" id="wfinish" onclick="finishStep7()" disabled>完成本步</button>
+  </div>`
+}
+
+async function judgeWord(i) {
+  const it = learn.wordItems[i]
+  if (!it || it.answered) return
+  const ans = (el('wa_' + i).value || '').trim()
+  if (!ans) { toast('请先写出意思', true); return }
+  const r = await api('/step/word-judge', 'POST', { word: it.word, answer: ans, mode: it.mode })
+  if (!r.ok) { toast(r.data.error || '判分失败', true); return }
+  const d = r.data
+  it.answered = true; it.correct = d.correct; it.reason = d.reason || ''
+  const wr = el('wr_' + i)
+  if (d.correct === true) {
+    playTone('ok')
+    wr.innerHTML = `<div class="feedback ok" style="margin-top:6px">✅ 正确！</div>`
+    el('wc_' + i).classList.add('done')
+  } else if (d.correct === false) {
+    playTone('err')
+    wr.innerHTML = `<div class="feedback retry" style="margin-top:6px">❌ 不正确<br/><b>解析：</b>${esc(d.reason || '与标准意思有差异，请对照学习。')}</div>`
+    el('wc_' + i).classList.add('wrong')
+  } else {
+    playTone('warn')
+    wr.innerHTML = `<div class="feedback" style="margin-top:6px">⚠️ ${esc(d.reason || '暂无法判分')}</div>`
+  }
+  if (learn.wordItems.every(x => x.answered)) {
+    const fb = el('wfinish'); if (fb) fb.disabled = false
+  }
+}
+
+function finishStep7() {
+  const items = learn.wordItems || []
+  const correct = items.filter(x => x.correct === true).length
+  const total = items.length
+  const acc = total ? correct / total : 0
+  const perfect = total > 0 && correct === total
+  finishStep(7, acc, perfect)
+}
+
+let _audioCtx = null
+function playTone(type) {
+  /* 浏览器内置音效（Web Audio 合成，无 MP3 文件，零网络开销） */
+  try {
+    _audioCtx = _audioCtx || new (window.AudioContext || window.webkitAudioContext)()
+    const ctx = _audioCtx
+    if (ctx.state === 'suspended') ctx.resume()
+    const now = ctx.currentTime
+    if (type === 'ok') {
+      [523.25, 659.25, 783.99].forEach((f, k) => {
+        const o = ctx.createOscillator(), g = ctx.createGain()
+        o.type = 'sine'; o.frequency.value = f
+        o.connect(g); g.connect(ctx.destination)
+        const t0 = now + k * 0.08
+        g.gain.setValueAtTime(0.0001, t0)
+        g.gain.exponentialRampToValueAtTime(0.25, t0 + 0.01)
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.18)
+        o.start(t0); o.stop(t0 + 0.2)
+      })
+    } else if (type === 'err') {
+      const o = ctx.createOscillator(), g = ctx.createGain()
+      o.type = 'square'; o.frequency.value = 160
+      o.connect(g); g.connect(ctx.destination)
+      g.gain.setValueAtTime(0.0001, now)
+      g.gain.exponentialRampToValueAtTime(0.25, now + 0.01)
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.35)
+      o.start(now); o.stop(now + 0.36)
+    } else {
+      const o = ctx.createOscillator(), g = ctx.createGain()
+      o.type = 'triangle'; o.frequency.value = 330
+      o.connect(g); g.connect(ctx.destination)
+      g.gain.setValueAtTime(0.0001, now)
+      g.gain.exponentialRampToValueAtTime(0.2, now + 0.01)
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.2)
+      o.start(now); o.stop(now + 0.22)
+    }
+  } catch (e) {}
+}
+
+function speakWord(word, variant) {
+  /* 浏览器内置 TTS 朗读单词（美音/英音），无需音频文件 */
+  try {
+    if (!('speechSynthesis' in window)) { toast('当前浏览器不支持语音朗读', true); return }
+    const u = new SpeechSynthesisUtterance(word)
+    u.lang = variant || 'en-US'; u.rate = 0.9
+    const vs = window.speechSynthesis.getVoices() || []
+    const exact = vs.find(v => (v.lang || '').replace('_', '-').toLowerCase() === (variant || 'en-US').toLowerCase())
+    const sim = vs.find(v => (v.lang || '').toLowerCase().startsWith((variant || 'en-US').slice(0, 2).toLowerCase()))
+    if (exact) u.voice = exact; else if (sim) u.voice = sim
+    window.speechSynthesis.cancel()
+    window.speechSynthesis.speak(u)
+  } catch (e) {}
 }
 
 /* 跳过：不会做时直接看答案，本句判为未通过并纳入下一轮复习循环 */
@@ -473,7 +673,7 @@ function drawPassBreak(body) {
   const n = learn.wrongSet.size
   const step = learn.step
   const skipBtn = learn.allowSkip
-    ? `<button class="btn ghost block" style="margin-top:10px" onclick="forceUnlock(${step})">${step < 6 ? '仍有未掌握，强制解锁下一步 →' : '仍有未掌握，强制完成课程 →'}</button>
+    ? `<button class="btn ghost block" style="margin-top:10px" onclick="forceUnlock(${step})">${step < 7 ? '仍有未掌握，强制解锁下一步 →' : '仍有未掌握，强制完成课程 →'}</button>
        <p class="muted" style="font-size:12px;margin-top:6px">强制解锁不发放金币奖励；未掌握的句子仍会保留在错题中。</p>`
     : ''
   body.innerHTML = `<div class="card center">
@@ -488,14 +688,14 @@ function drawPassBreak(body) {
 async function forceUnlock(step) {
   const r = await api('/step/finish', 'POST', { course_id: learn.courseId, step, accuracy: 0, perfect: false, force: true })
   if (!r.ok) { toast(r.data.error || '强制解锁失败', true); return }
-  toast('已强制解锁' + (step < 6 ? '下一步' : '并完成课程'))
+  toast('已强制解锁' + (step < 7 ? '下一步' : '并完成课程'))
   // 刷新解锁状态
   const cr = await api('/courses')
   if (cr.ok) {
     const info = (cr.data.courses || []).find(c => String(c.course_id) === String(learn.courseId))
     if (info) learn.unlocks = info.step_unlocks || learn.unlocks
   }
-  if (step === 6) { setTimeout(() => nav('#/'), 800); return }
+  if (step === 7) { setTimeout(() => nav('#/'), 800); return }
   if (learn.unlocks[String(step + 1)]) goStep(step + 1)
   else drawLearn()
 }
@@ -515,7 +715,7 @@ function finishStepView(body) {
   const correct = learn.results.filter(Boolean).length
   const acc = step === 1 ? 1 : (learn.wrongSet.size === 0 ? 1 : correct / total)
   const perfect = step >= 2 && !learn.hadRedo && learn.wrongSet.size === 0
-  const nextLabel = step < 6 ? `解锁/进入步骤${step + 1}` : '完成课程'
+  const nextLabel = step < 7 ? `解锁/进入步骤${step + 1}` : '完成课程'
   body.innerHTML = `<div class="card center">
     <h3>Step ${step} 完成</h3>
     ${step === 1 ? '<p>沉浸浏览完成</p>' : `<p>全部句子已做对，正确率 100%</p>`}
@@ -534,6 +734,11 @@ async function finishStep(step, accuracy, perfect) {
     return
   }
   const d = r.data
+  if (d.passed === false) {
+    toast(`正确率需达 ${Math.round((d.threshold || 0) * 100)}%，继续练习吧`, true)
+    drawLearn()
+    return
+  }
   if (d.awards && d.awards.length) {
     if (d.balance != null) setBalance(d.balance)
     celebrate(d.awards.join('、'), d.balance)
@@ -546,8 +751,8 @@ async function finishStep(step, accuracy, perfect) {
     const info = (cr.data.courses || []).find(c => String(c.course_id) === String(learn.courseId))
     if (info) learn.unlocks = info.step_unlocks || learn.unlocks
   }
-  // 步骤6完成：记录进度后自动返回首页（课程浏览界面）
-  if (step === 6) {
+  // 步骤6/7完成：记录进度后自动返回首页（课程浏览界面）
+  if (step === 6 || step === 7) {
     if (d.awards && d.awards.length) {
       if (d.balance != null) setBalance(d.balance)
       celebrate(d.awards.join('、'), d.balance)
@@ -563,7 +768,7 @@ async function finishStep(step, accuracy, perfect) {
   }
   // 解锁后自动进入下一步（步骤1 → 直接进入步骤2，无需再点）
   // 步骤5完成进入步骤6时，goStep(6) 会先展示全文回顾（Step6 预学）
-  if (step < 6 && learn.unlocks[String(step + 1)]) {
+  if (step < 7 && learn.unlocks[String(step + 1)]) {
     goStep(step + 1)
   } else {
     drawLearn()
@@ -741,7 +946,7 @@ function reportInnerHtml(rep) {
   const ov = rep.overview
   const acc = rep.step_accuracy || []
   const accHtml = acc.length ? acc.map(a => {
-    const bars = [2, 3, 4, 5, 6].map(st => {
+    const bars = [2, 3, 4, 5, 6, 7].map(st => {
       const v = Math.round((a['' + st] || 0) * 100)
       return `<div class="col" style="height:${Math.max(4, v)}%" title="Step${st}:${v}%"><span>S${st}</span></div>`
     }).join('')

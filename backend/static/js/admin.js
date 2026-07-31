@@ -214,6 +214,7 @@ async function loadCourseList() {
           <button class="btn ghost sm" onclick="openAudioUpload(${c.id})">补充音频</button>
           <button class="btn sm" onclick="scanCourseAudio(${c.id})">🔄 扫描</button>
           <button class="btn ghost sm" onclick="openCheckErrors(${c.id})">检查错误</button>
+          <button class="btn ghost sm" onclick="openWordManager(${c.id})">单词</button>
           <button class="btn ghost sm" onclick="openEditCourse(${c.id})">编辑</button>
           <button class="btn danger sm" onclick="deleteCourse(${c.id}, '${esc(c.title)}')">删除</button>
         </td>
@@ -309,6 +310,54 @@ async function saveEditCourse(courseId) {
   const r = await api('/admin/update-course', 'POST', { course_id: courseId, title })
   if (!r.ok) { toast(r.data.error || '保存失败', true); return }
   toast('已保存'); closeModal(); loadCourseList()
+}
+
+/* 课程单词库管理（v0.5 Step7 单词巩固） */
+async function openWordManager(courseId) {
+  modal(`<div id="wmBox"><h3>单词库 · 课程 #${courseId}</h3>
+    <p class="muted" style="font-size:13px">一键提取本课实词（自动去除冠词/介词/助词等虚词，仅保留名词/动词/形容词/副词）。提取后可手动删除或新增。学生做题时直接读取本库，不实时提取。</p>
+    <div class="row" style="margin-top:8px">
+      <button class="btn" onclick="extractWords(${courseId})">⚡ 一键提取单词</button>
+    </div>
+    <div class="spread" style="margin-top:12px"><b>当前单词（<span id="wmCount">0</span>）</b>
+      <span><input id="wmNew" placeholder="新增单词" style="width:auto" />
+      <button class="btn ghost sm" onclick="addWord(${courseId})">+ 添加</button></span>
+    </div>
+    <div id="wmList" class="wm-list" style="margin-top:8px">加载中…</div>
+    <div class="row" style="margin-top:12px"><button class="btn ghost" onclick="closeModal()">关闭</button></div>
+  </div>`)
+  loadWordList(courseId)
+}
+async function loadWordList(courseId) {
+  const r = await api(`/admin/course/${courseId}/words`)
+  const box = el('wmList'); if (!box) return
+  if (!r.ok) { box.innerHTML = `<div class="empty">${esc(r.data.error || '')}</div>`; return }
+  const ws = r.data.words || []
+  const cnt = el('wmCount'); if (cnt) cnt.textContent = ws.length
+  if (!ws.length) { box.innerHTML = '<div class="muted">暂无单词，点「一键提取单词」生成。</div>'; return }
+  box.innerHTML = ws.map(w => `<div class="wm-row">
+    <span class="wm-word">${esc(w.word)}</span>
+    ${w.is_custom ? '<span class="tag" style="font-size:11px">手动</span>' : ''}
+    <button class="btn ghost sm" onclick="deleteWord(${courseId}, ${w.id}, '${esc(w.word)}')">删除</button>
+  </div>`).join('')
+}
+async function extractWords(courseId) {
+  const r = await api(`/admin/course/${courseId}/extract-words`, 'POST', {})
+  if (!r.ok) { toast(r.data.error || '提取失败', true); return }
+  toast(`已提取 ${r.data.count} 个单词`); loadWordList(courseId)
+}
+async function addWord(courseId) {
+  const inp = el('wmNew'); const w = (inp.value || '').trim().toLowerCase()
+  if (!w) { toast('请输入单词', true); return }
+  const r = await api(`/admin/course/${courseId}/word`, 'POST', { word: w })
+  if (!r.ok) { toast(r.data.error || '添加失败', true); return }
+  inp.value = ''; loadWordList(courseId)
+}
+async function deleteWord(courseId, wordId, word) {
+  if (!confirm(`删除单词「${word}」？`)) return
+  const r = await api(`/admin/course/${courseId}/word/${wordId}`, 'DELETE')
+  if (!r.ok) { toast(r.data.error || '删除失败', true); return }
+  loadWordList(courseId)
 }
 async function publishCourse(id) {
   const r = await api('/admin/publish-course', 'POST', { course_id: id })

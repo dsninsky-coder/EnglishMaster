@@ -197,6 +197,15 @@ def migrate():
             db.session.add(SystemSetting(key='migrated_step6', value=json.dumps(True)))
             db.session.commit()
             print('已完成步骤重编号数据迁移（插入跟读 Step4）。')
+        # ---- v0.5 新增 Step7 单词巩固：course_assignments 增加 step_7_unlocked 列 ----
+        # （course_words 表由 main() 中的 db.create_all() 自动建表；此处仅补列，幂等）
+        acols7 = [r[1] for r in db.session.execute(
+            text("PRAGMA table_info(course_assignments)")).fetchall()]
+        if 'step_7_unlocked' not in acols7:
+            db.session.execute(text(
+                "ALTER TABLE course_assignments ADD COLUMN step_7_unlocked BOOLEAN DEFAULT 0"))
+            db.session.commit()
+            print('已为 course_assignments 增加 step_7_unlocked 列。')
         # db.create_all() 已建单词大师新表（word_lists / words / word_user_states / word_exam_configs）
 
 

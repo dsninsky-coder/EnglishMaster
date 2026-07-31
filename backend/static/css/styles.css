@@ -433,3 +433,37 @@ table.tbl td.ops .btn { margin: 2px 2px; }
   .admin-side-foot .btn { white-space: nowrap; }
   .admin-content { padding: 16px; }
 }
+
+/* ============================
+   Step4 跟读：逐字对比高亮
+   ============================ */
+.cm { color: var(--ok); background: rgba(62,207,142,.18); border-radius: 4px; padding: 0 1px; }
+.cw { color: #fff; background: var(--warn); border-radius: 4px; padding: 0 1px; }
+
+/* ============================
+   Step7 单词巩固
+   ============================ */
+.word-card {
+  border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px;
+  margin-top: 12px; background: var(--surface);
+}
+.word-card.done { border-color: var(--ok); background: rgba(62,207,142,.06); }
+.word-card.wrong { border-color: var(--warn); background: rgba(255,180,84,.06); }
+.word-en { font-size: 22px; font-weight: 700; letter-spacing: .5px; margin-top: 4px; }
+.word-audio { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.word-input {
+  width: 100%; margin-top: 10px; padding: 10px 12px; font-size: 16px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
+  color: var(--text);
+}
+.word-input:focus { outline: 2px solid var(--primary); border-color: transparent; }
+
+/* 课程单词库管理弹窗 */
+.wm-list { max-height: 320px; overflow-y: auto; border: 1px solid var(--line); border-radius: 12px; padding: 6px; }
+.wm-row {
+  display: flex; align-items: center; gap: 8px; padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.wm-row:last-child { border-bottom: none; }
+.wm-word { font-size: 16px; font-weight: 600; flex: 1; }
+
