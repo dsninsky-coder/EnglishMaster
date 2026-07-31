@@ -163,6 +163,40 @@ def migrate():
                 db.session.add(SystemSetting(key=k, value=json.dumps(v)))
         db.session.commit()
         print('已初始化单词大师配置。')
+        # ---- v0.4 步骤重编号：在 Step3(听音) 与 Step4(中译英) 之间插入「跟读」Step4 ----
+        # 原 Step4 中译英 -> 新 Step5；原 Step5 续写 -> 新 Step6。旧数据一次性位移，幂等（靠标记）。
+        if SystemSetting.query.get('migrated_step6') is None:
+            from models import CourseAssignment, StudentSentenceProgress, WrongAnswer
+            acols = [r[1] for r in db.session.execute(
+                text("PRAGMA table_info(course_assignments)")).fetchall()]
+            if 'step_6_unlocked' not in acols:
+                db.session.execute(text(
+                    "ALTER TABLE course_assignments ADD COLUMN step_6_unlocked BOOLEAN DEFAULT 0"))
+                db.session.commit()
+            # 进度/错题：旧 step >= 4（中译英/续写）整体 +1（跟读无旧数据）
+            db.session.execute(text(
+                "UPDATE student_sentence_progress SET step = step + 1 WHERE step >= 4"))
+            db.session.execute(text(
+                "UPDATE wrong_answers SET step = step + 1 WHERE step >= 4"))
+            for a in CourseAssignment.query.all():
+                # completed_steps：旧 >=4 元素 +1（2,3 不变）
+                if a.completed_steps:
+                    a.completed_steps = [x + 1 if (x or 0) >= 4 else x
+                                         for x in a.completed_steps]
+                # unlock 列映射：新4(跟读)=旧3或旧4；新5(中译英)=旧4；新6(续写)=旧5
+                old4 = bool(a.step_4_unlocked)
+                old5 = bool(a.step_5_unlocked)
+                a.step_4_unlocked = old4 or bool(a.step_3_unlocked)
+                a.step_5_unlocked = old4
+                a.step_6_unlocked = old5
+                # current_step 由解锁列推导（解锁为顺序，最高解锁步即当前进度）
+                unlocked = [n for n in (1, 2, 3, 4, 5, 6)
+                            if getattr(a, f'step_{n}_unlocked')]
+                a.current_step = max(unlocked) if unlocked else 1
+            db.session.commit()
+            db.session.add(SystemSetting(key='migrated_step6', value=json.dumps(True)))
+            db.session.commit()
+            print('已完成步骤重编号数据迁移（插入跟读 Step4）。')
         # db.create_all() 已建单词大师新表（word_lists / words / word_user_states / word_exam_configs）
 
 

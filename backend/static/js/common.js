@@ -122,11 +122,11 @@ function adminSubTabs(items, active) {
 
 /* ---------- 登录 ---------- */
 function renderLogin() {
-  el('app').innerHTML = `<div class="app"><div class="content" style="margin-top:18vh">
+  el('app').innerHTML = `<div class="app"><div class="auth-wrap"><div class="auth-inner">
     <div class="center" style="margin-bottom:24px">
       <div style="font-size:48px">📚</div>
       <h2>英语大师</h2>
-      <p class="muted">锁定式闯关 · 五步法深度学习</p>
+      <p class="muted">锁定式闯关 · 六步法深度学习</p>
     </div>
     <form class="card" onsubmit="return loginSubmit(event)">
       <input id="lu" placeholder="用户名" style="margin-bottom:12px" />
@@ -136,7 +136,7 @@ function renderLogin() {
     </form>
     <p class="center muted">还没有账号？<a href="#/register" style="color:var(--primary)">注册学生号</a></p>
     <p class="center muted" style="font-size:13px">管理员默认账号 admin / admin123</p>
-  </div></div>`
+  </div></div></div>`
 }
 async function loginSubmit(e) {
   e.preventDefault()
@@ -154,7 +154,7 @@ async function loginSubmit(e) {
 
 /* ---------- 注册 ---------- */
 function renderRegister() {
-  el('app').innerHTML = `<div class="app"><div class="content" style="margin-top:18vh">
+  el('app').innerHTML = `<div class="app"><div class="auth-wrap"><div class="auth-inner">
     <div class="center" style="margin-bottom:24px"><h2>注册学生号</h2></div>
     <form class="card" onsubmit="return registerSubmit(event)">
       <input id="ru" placeholder="用户名" style="margin-bottom:12px" />

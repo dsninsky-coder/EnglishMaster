@@ -88,6 +88,7 @@ class CourseAssignment(db.Model):
     step_3_unlocked = db.Column(db.Boolean, default=False)
     step_4_unlocked = db.Column(db.Boolean, default=False)
     step_5_unlocked = db.Column(db.Boolean, default=False)
+    step_6_unlocked = db.Column(db.Boolean, default=False)
     is_completed = db.Column(db.Boolean, default=False)
     # 奖励追踪
     completed_steps = db.Column(db.JSON, default=list)      # [2,3,...]

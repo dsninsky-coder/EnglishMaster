@@ -50,7 +50,7 @@ async function renderListenHome() {
     else coursesHtml = cs.map(c => {
       const status = c.status || (c.is_completed ? 'review' : 'start')
       const cur = c.current_step || 1
-      const pct = Math.round(((c.completed_steps || []).length / 5) * 100)
+      const pct = Math.round(((c.completed_steps || []).length / 6) * 100)
       let badge = '', btn
       if (status === 'locked') {
         badge = '<span class="tag danger">🔒 未解锁</span>'
@@ -173,6 +173,7 @@ async function renderLearn(courseId) {
     showOverview: false, queue: null, queueStep: -1, wrongSet: new Set(),
     curSentIdx: -1, passNo: 1, hadRedo: false,
     allowSkip: !!(cr.ok && cr.data.allow_skip),   // 该生是否被管理员允许"强制解锁下一步"
+    enHint: r.data.en_hint || { words: 3, changes: 5 },  // 中译英提示配置（管理员后台设置）
   }
   drawLearn()
 }
@@ -180,7 +181,7 @@ async function renderLearn(courseId) {
 function drawLearn() {
   const total = learn.sentences.length
   const unlocks = learn.unlocks
-  const stepsHtml = [0, 1, 2, 3, 4, 5].map(n => {
+  const stepsHtml = [0, 1, 2, 3, 4, 5, 6].map(n => {
     if (n === 0) return `<div class="step-pill ${learn.step === 0 ? 'active' : ''}" onclick="goStep(0)">词汇</div>`
     const locked = !unlocks[String(n)]
     const cls = learn.step === n ? 'active' : (locked ? 'locked' : 'done')
@@ -206,8 +207,8 @@ function drawLearn() {
 
 function goStep(n, skipFull) {
   if (n > 0 && !learn.unlocks[String(n)]) { toast('该步骤尚未解锁', true); return }
-  // 进入步骤5之前，先展示全文回顾（Step5 预学），每次进入都显示
-  if (n === 5 && !skipFull) { drawFullText(el('step-body')); return }
+  // 进入步骤6（续写）之前，先展示全文回顾（预学），每次进入都显示
+  if (n === 6 && !skipFull) { drawFullText(el('step-body')); return }
   learn.step = n; learn.idx = 0; learn.results = []; learn.view = 'show'
   learn.queue = null; learn.wrongSet = new Set()   // 重置本步练习状态（重新开始）
   learn.showOverview = false; learn.hadRedo = false
@@ -255,15 +256,15 @@ function drawStep1(body) {
     <div class="cn" style="margin-top:10px">${esc(s.chinese)}</div>
     <div id="en1" style="margin-top:12px">
       <div class="sentence">${hl(s.english, tw)}</div>
-      ${hasAudio ? `<button class="btn ghost sm" style="margin-top:8px" onclick="playAudio('${esc(s.audio_url)}', curRate('rate1'))">🔊 再听这句</button>` : ''}
+      ${hasAudio ? `<button class="btn ghost sm aud-btn" style="margin-top:8px" data-label="🔊 再听这句" onclick="playAudio('${esc(s.audio_url)}', 1, this)">🔊 再听这句</button>` : ''}
     </div>
-    ${hasAudio ? `<div class="row" style="margin-top:12px">
-        <button class="btn" style="flex:1;white-space:nowrap" onclick="playAudio('${esc(s.audio_url)}', curRate('rate1'))">🔊 播放</button>
-        <select id="rate1" class="mini" style="flex:0 0 auto;width:88px">${rateOptions(1)}</select>
-      </div>` : '<div class="muted" style="margin-top:12px">无音频</div>'}
+    ${hasAudio ? `<div class="rate-btns" style="margin-top:12px">${rateButtons(s.audio_url)}</div>` : '<div class="muted" style="margin-top:12px">无音频</div>'}
     <button class="btn block" style="margin-top:12px" id="toggleEn1" onclick="toggleEnglish1()">隐藏原文</button>
     <div class="req-hint">学习要求：请仔细听录音，阅读英文，并看翻译。搞懂后，隐藏英文再听一遍。不看英文也能听懂后，进入下一句。</div>
-    <button class="btn block" style="margin-top:12px" onclick="nextStep1()">${isLast ? '完成浏览 →' : '下一句 →'}</button>
+    <div class="row" style="margin-top:12px">
+      ${learn.idx > 0 ? `<button class="btn ghost" style="flex:1" onclick="prevStep1()">← 上一句</button>` : '<span style="flex:1"></span>'}
+      <button class="btn" style="flex:1" onclick="nextStep1()">${isLast ? '完成浏览 →' : '下一句 →'}</button>
+    </div>
   </div>`
 }
 function toggleEnglish1() {
@@ -271,6 +272,9 @@ function toggleEnglish1() {
   if (!e || !btn) return
   if (e.style.display === 'none') { e.style.display = 'block'; btn.textContent = '隐藏原文' }
   else { e.style.display = 'none'; btn.textContent = '显示英文' }
+}
+function prevStep1() {
+  if (learn.idx > 0) { learn.idx--; drawStep1(el('step-body')) }
 }
 function nextStep1() {
   learn.idx++
@@ -285,7 +289,8 @@ function drawStepN(body) {
   if (learn.queueStep !== step || !learn.queue) {
     learn.queueStep = step
     const seq = learn.sentences.map((_, i) => i)
-    learn.order = (step === 3 || step === 4 || step === 5) ? shuffle(seq) : seq
+    // Step3 听音写中文 / Step5 中译英 / Step6 续写 随机出题；Step4 跟读按原顺序
+    learn.order = (step === 3 || step === 5 || step === 6) ? shuffle(seq) : seq
     learn.queue = learn.order.slice()
     learn.wrongSet = new Set()
     learn.idx = 0
@@ -297,6 +302,10 @@ function drawStepN(body) {
   const sentIdx = learn.queue[learn.idx]
   learn.curSentIdx = sentIdx
   const s = learn.sentences[sentIdx]
+
+  // Step4 跟读：非评分，听音跟读 + 上一句/下一句导航
+  if (step === 4) return drawFollow(body, s)
+
   let promptHtml = '', inputHint = '', audioCtl = ''
   if (step === 2) {
     promptHtml = `<div class="sentence">${hl(s.english, s.target_words || [])}</div>`
@@ -304,17 +313,16 @@ function drawStepN(body) {
   } else if (step === 3) {
     const hasAudio = !!s.audio_url
     if (hasAudio) {
-      promptHtml = `<button class="btn block" onclick="playAudio('${esc(s.audio_url)}', curRate('rate3'))">🔊 仅听音（不显示文字）</button>`
-      audioCtl = `<select id="rate3" class="mini" style="margin-top:8px">${rateOptions(1)}</select>
-        <div class="muted" style="font-size:12px">选择倍速后点击上方播放</div>`
+      promptHtml = `<div class="rate-btns">${rateButtons(s.audio_url)}</div>
+        <p class="muted" style="font-size:12px;margin-top:6px">仅听音（不显示文字），写出你听到的中文意思</p>`
     } else {
       promptHtml = `<div class="cn">（本句无音频，直接写出中文意思）</div>`
     }
     inputHint = '听音后写出中文意思'
-  } else if (step === 4) {
+  } else if (step === 5) {
     promptHtml = `<div class="cn">${esc(s.chinese)}</div>`
     inputHint = '请输入英文（中译英）'
-  } else if (step === 5) {
+  } else if (step === 6) {
     const prevIdx = learn.sentences.findIndex(x => x.sentence_order === s.sentence_order)
     const nxt = learn.sentences[prevIdx + 1]
     if (!nxt) { learn.idx++; return drawStepN(body) }
@@ -322,7 +330,25 @@ function drawStepN(body) {
       <p class="muted">↑ 这是上文，请写出它的<b>下一句</b>英文：</p>`
     inputHint = '请输入下一句英文'
   }
+  // Step5 中译英：随机单词提示（可更换，更换足够多次即可揭示全句）
+  let hintHtml = ''
+  if (step === 5) {
+    if (!learn.hintFor || learn.hintFor.idx !== sentIdx) {
+      learn.hintFor = { idx: sentIdx, revealed: new Set(), changes: 0 }
+    }
+    const cfg = learn.enHint || { words: 3, changes: 5 }
+    const words = s.english.split(/\s+/).filter(Boolean)
+    const shown = words.map((w, i) => learn.hintFor.revealed.has(i)
+      ? `<b>${esc(w)}</b>` : '<span class="hw">_____</span>').join(' ')
+    const done = learn.hintFor.revealed.size >= words.length
+    hintHtml = `<div class="hint-box">
+      <div class="spread"><span class="muted">单词提示（${learn.hintFor.revealed.size}/${words.length}，已更换 ${learn.hintFor.changes}/${cfg.changes} 次）</span>
+        <button class="btn ghost sm" onclick="changeEnHint()" ${learn.hintFor.changes >= cfg.changes || done ? 'disabled' : ''}>换一批提示</button></div>
+      <div class="en-hint">${shown}</div>
+    </div>`
+  }
   const totalQ = learn.queue.length
+  const showSkip = (step === 2 || step === 5 || step === 6)
   body.innerHTML = `<div class="card">
     <div class="spread">
       <span class="muted">第 ${learn.idx + 1}/${totalQ} 句 · Step ${step}${learn.passNo > 1 ? ' · 第' + learn.passNo + '轮' : ''}</span>
@@ -330,9 +356,10 @@ function drawStepN(body) {
     </div>
     <div style="margin-top:10px">${promptHtml}</div>
     ${audioCtl}
+    ${hintHtml}
     <textarea id="uin" rows="2" placeholder="${inputHint}" style="margin-top:12px"></textarea>
     <div class="req-hint">${stepHint(step)}</div>
-    ${(step === 2 || step === 5) ? `<div class="row" style="margin-top:12px">
+    ${showSkip ? `<div class="row" style="margin-top:12px">
       <button class="btn" style="flex:2" onclick="submitStepN(${s.id}, ${step})">提交</button>
       <button class="btn ghost" style="flex:1" onclick="skipStepN(${s.id}, ${step})">跳过看答案</button>
     </div>` : `<button class="btn block" style="margin-top:12px" onclick="submitStepN(${s.id}, ${step})">提交</button>`}
@@ -340,11 +367,56 @@ function drawStepN(body) {
   </div>`
 }
 
+/* Step4 跟读：听录音，模仿语音语调大声跟读 */
+function drawFollow(body, s) {
+  const tw = s.target_words || []
+  const hasAudio = !!s.audio_url
+  const isLast = learn.idx + 1 >= learn.queue.length
+  const totalQ = learn.queue.length
+  body.innerHTML = `<div class="card">
+    <div class="spread">
+      <span class="muted">第 ${learn.idx + 1}/${totalQ} 句 · Step 4 跟读</span>
+      <button class="btn ghost sm" onclick="backToSteps()">← 步骤</button>
+    </div>
+    <div class="cn" style="margin-top:10px">${esc(s.chinese)}</div>
+    <div class="sentence" style="margin-top:8px">${hl(s.english, tw)}</div>
+    ${hasAudio ? `<div class="rate-btns" style="margin-top:12px">${rateButtons(s.audio_url)}</div>` : '<div class="muted" style="margin-top:12px">无音频，请直接跟读</div>'}
+    <div class="req-hint">学习要求：先听录音，模仿语音语调大声跟读这句英文；可多听几遍直到流利。</div>
+    <div class="row" style="margin-top:12px">
+      ${learn.idx > 0 ? `<button class="btn ghost" style="flex:1" onclick="prevStepN()">← 上一句</button>` : '<span style="flex:1"></span>'}
+      <button class="btn" style="flex:1" onclick="nextStepN()">${isLast ? '完成跟读 →' : '下一句 →'}</button>
+    </div>
+  </div>`
+}
+function nextStepN() {
+  learn.idx++
+  if (learn.idx >= learn.queue.length) finishStepView(el('step-body'))
+  else drawStepN(el('step-body'))
+}
+function prevStepN() {
+  if (learn.idx > 0) { learn.idx--; drawStepN(el('step-body')) }
+}
+function changeEnHint() {
+  const s = learn.sentences[learn.curSentIdx]
+  const hs = learn.hintFor
+  if (!hs) return
+  const words = s.english.split(/\s+/).filter(Boolean)
+  const cfg = learn.enHint || { words: 3, changes: 5 }
+  if (hs.changes >= cfg.changes) { toast('已达最大更换次数', true); return }
+  hs.changes++
+  const hidden = []
+  words.forEach((w, i) => { if (!hs.revealed.has(i)) hidden.push(i) })
+  shuffle(hidden).slice(0, cfg.words).forEach(i => hs.revealed.add(i))
+  if (hs.changes >= cfg.changes) { words.forEach((w, i) => hs.revealed.add(i)) }  // 最后一次揭示全句答案
+  drawStepN(el('step-body'))
+}
+
 function stepHint(step) {
   if (step === 2) return '学习要求：将上面的英语句子翻译为中文。'
   if (step === 3) return '学习要求：讲听到的英语句子的中文意思写出来。如果不会了，请回到步骤1。'
-  if (step === 4) return '学习要求：把上面的中文句子翻译成英文。'
-  if (step === 5) return '学习要求：根据上文学写出连贯的下一句英文。'
+  if (step === 4) return '学习要求：先听录音，模仿语音语调大声跟读这句英文，强化语音输入。'
+  if (step === 5) return '学习要求：把上面的中文句子翻译成英文（可用「换一批提示」逐步揭示单词）。'
+  if (step === 6) return '学习要求：根据上文学写出连贯的下一句英文。'
   return ''
 }
 
@@ -401,7 +473,7 @@ function drawPassBreak(body) {
   const n = learn.wrongSet.size
   const step = learn.step
   const skipBtn = learn.allowSkip
-    ? `<button class="btn ghost block" style="margin-top:10px" onclick="forceUnlock(${step})">${step < 5 ? '仍有未掌握，强制解锁下一步 →' : '仍有未掌握，强制完成课程 →'}</button>
+    ? `<button class="btn ghost block" style="margin-top:10px" onclick="forceUnlock(${step})">${step < 6 ? '仍有未掌握，强制解锁下一步 →' : '仍有未掌握，强制完成课程 →'}</button>
        <p class="muted" style="font-size:12px;margin-top:6px">强制解锁不发放金币奖励；未掌握的句子仍会保留在错题中。</p>`
     : ''
   body.innerHTML = `<div class="card center">
@@ -416,14 +488,14 @@ function drawPassBreak(body) {
 async function forceUnlock(step) {
   const r = await api('/step/finish', 'POST', { course_id: learn.courseId, step, accuracy: 0, perfect: false, force: true })
   if (!r.ok) { toast(r.data.error || '强制解锁失败', true); return }
-  toast('已强制解锁' + (step < 5 ? '下一步' : '并完成课程'))
+  toast('已强制解锁' + (step < 6 ? '下一步' : '并完成课程'))
   // 刷新解锁状态
   const cr = await api('/courses')
   if (cr.ok) {
     const info = (cr.data.courses || []).find(c => String(c.course_id) === String(learn.courseId))
     if (info) learn.unlocks = info.step_unlocks || learn.unlocks
   }
-  if (step === 5) { setTimeout(() => nav('#/'), 800); return }
+  if (step === 6) { setTimeout(() => nav('#/'), 800); return }
   if (learn.unlocks[String(step + 1)]) goStep(step + 1)
   else drawLearn()
 }
@@ -443,7 +515,7 @@ function finishStepView(body) {
   const correct = learn.results.filter(Boolean).length
   const acc = step === 1 ? 1 : (learn.wrongSet.size === 0 ? 1 : correct / total)
   const perfect = step >= 2 && !learn.hadRedo && learn.wrongSet.size === 0
-  const nextLabel = step < 5 ? `解锁/进入步骤${step + 1}` : '完成课程'
+  const nextLabel = step < 6 ? `解锁/进入步骤${step + 1}` : '完成课程'
   body.innerHTML = `<div class="card center">
     <h3>Step ${step} 完成</h3>
     ${step === 1 ? '<p>沉浸浏览完成</p>' : `<p>全部句子已做对，正确率 100%</p>`}
@@ -474,8 +546,8 @@ async function finishStep(step, accuracy, perfect) {
     const info = (cr.data.courses || []).find(c => String(c.course_id) === String(learn.courseId))
     if (info) learn.unlocks = info.step_unlocks || learn.unlocks
   }
-  // 步骤5完成：记录进度后自动返回首页（课程浏览界面）
-  if (step === 5) {
+  // 步骤6完成：记录进度后自动返回首页（课程浏览界面）
+  if (step === 6) {
     if (d.awards && d.awards.length) {
       if (d.balance != null) setBalance(d.balance)
       celebrate(d.awards.join('、'), d.balance)
@@ -490,26 +562,26 @@ async function finishStep(step, accuracy, perfect) {
     return
   }
   // 解锁后自动进入下一步（步骤1 → 直接进入步骤2，无需再点）
-  // 步骤4完成进入步骤5时，goStep(5) 会先展示全文回顾（Step5 预学）
-  if (step < 5 && learn.unlocks[String(step + 1)]) {
+  // 步骤5完成进入步骤6时，goStep(6) 会先展示全文回顾（Step6 预学）
+  if (step < 6 && learn.unlocks[String(step + 1)]) {
     goStep(step + 1)
   } else {
     drawLearn()
   }
 }
 
-/* Step 5 预学：全文回顾（中英文对照，按原文顺序） */
+/* Step 6 预学：全文回顾（中英文对照，按原文顺序） */
 function drawFullText(body) {
   const ordered = learn.sentences.slice().sort((a, b) => (a.sentence_order || 0) - (b.sentence_order || 0))
   body.innerHTML = `<div class="card">
     <div class="spread">
-      <h3>全文回顾 · Step 5 预学</h3>
+      <h3>全文回顾 · Step 6 预学</h3>
       <button class="btn ghost sm" onclick="backToSteps()">← 步骤</button>
     </div>
-    <p class="muted">进入第五步前，先按顺序通读整篇，建立整体语感。一句英文，一句中文。</p>
+    <p class="muted">进入第六步前，先按顺序通读整篇，建立整体语感。一句英文，一句中文。</p>
     ${ordered.map(s => `<div class="ft-en">${hl(s.english, s.target_words || [])}</div>
       <div class="ft-cn">${esc(s.chinese)}</div>`).join('')}
-    <button class="btn block" style="margin-top:16px" onclick="goStep(5, true)">进入 Step 5 →</button>
+    <button class="btn block" style="margin-top:16px" onclick="goStep(6, true)">进入 Step 6 →</button>
   </div>`
 }
 function celebrate(awards, balance) {
@@ -669,7 +741,7 @@ function reportInnerHtml(rep) {
   const ov = rep.overview
   const acc = rep.step_accuracy || []
   const accHtml = acc.length ? acc.map(a => {
-    const bars = [2, 3, 4, 5].map(st => {
+    const bars = [2, 3, 4, 5, 6].map(st => {
       const v = Math.round((a['' + st] || 0) * 100)
       return `<div class="col" style="height:${Math.max(4, v)}%" title="Step${st}:${v}%"><span>S${st}</span></div>`
     }).join('')
@@ -709,11 +781,32 @@ async function renderReport() {
 }
 
 /* ---------- 通用工具 ---------- */
-function playAudio(url, rate) {
+let _playingBtn = null
+function playAudio(url, rate, btn) {
   if (!url) { toast('该句暂无音频', true); return }
+  if (_playingBtn) return  // 防连点：上一句播放完前不再响应
   try {
-    const a = new Audio(url); a.playbackRate = rate || 1; a.play().catch(() => toast('音频播放失败', true))
+    const a = new Audio(url); a.playbackRate = rate || 1
+    document.querySelectorAll('.aud-btn').forEach(b => { b.disabled = true })
+    if (btn) btn.textContent = '⏳ 播放中…'
+    const restore = () => {
+      document.querySelectorAll('.aud-btn').forEach(b => {
+        b.disabled = false
+        if (b.dataset.label) b.textContent = b.dataset.label
+      })
+      _playingBtn = null
+    }
+    a.onended = restore
+    a.onerror = () => { toast('音频播放失败', true); restore() }
+    a.play().catch(() => { toast('音频播放失败', true); restore() })
+    _playingBtn = btn || true
   } catch (e) { toast('音频播放失败', true) }
+}
+function rateButtons(url) {
+  const rates = [0.5, 0.8, 1, 1.2, 1.5]
+  return rates.map(r =>
+    `<button class="btn ghost sm aud-btn" data-label="${r}x" onclick="playAudio('${esc(url)}', ${r}, this)">${r}x</button>`
+  ).join('')
 }
 function hl(eng, tws) {
   if (!eng) return ''

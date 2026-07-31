@@ -223,6 +223,30 @@ table.tbl td.ops .btn { margin: 2px 2px; }
 .txn .t-time { color: var(--text-dim); }
 .txn .t-reason { color: var(--text); }
 
+/* 登录/注册页：移动端键盘遮挡修复 —— 居中但有剩余空间时回退为顶部对齐并可滚动 */
+.auth-wrap {
+  flex: 1; display: flex; padding: 24px 16px; box-sizing: border-box;
+  overflow-y: auto; min-height: 100vh; min-height: 100dvh;
+}
+.auth-inner { margin: auto; width: 100%; max-width: 420px; }
+
+/* Step1 / Step3 倍速播放按钮组（替代 <select>，兼容个别设备） */
+.rate-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+.rate-btns .btn { flex: 0 0 auto; min-width: 56px; }
+.aud-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Step5（中译英）随机单词提示 */
+.hint-box { background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-top: 12px; }
+.hint-box .spread { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.en-hint { font-size: 18px; line-height: 1.9; margin-top: 8px; word-break: break-word; }
+.en-hint b { color: var(--accent); }
+.hw {
+  display: inline-block; min-width: 44px; margin: 0 4px;
+  border-bottom: 2px solid var(--text-dim); color: transparent;
+  user-select: none;
+}
+
+
 /* ============================
    三大入口卡片（首页选择器）
    ============================ */

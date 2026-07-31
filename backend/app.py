@@ -32,7 +32,10 @@ os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 os.makedirs(COURSE_UPLOAD_DIR, exist_ok=True)
 
 # 各步通过阈值
-STEP_THRESHOLDS = {1: 0.0, 2: 0.85, 3: 0.80, 4: 0.80, 5: 0.70}
+# 步骤阈值（重编号后：1=沉浸 2=英译中 3=听音写中文 4=跟读 5=中译英 6=续写）
+STEP_THRESHOLDS = {1: 0.0, 2: 0.85, 3: 0.80, 4: 0.0, 5: 0.80, 6: 0.70}
+# 评分步骤（发放通关/完美金币）：跟读(4)与沉浸(1)为非评分练习步骤
+SCORED_STEPS = {2, 3, 5, 6}
 
 # 系统配置默认值（可在 /admin/settings 后台修改）
 DEFAULT_SETTINGS = {
@@ -40,6 +43,8 @@ DEFAULT_SETTINGS = {
     'checkin_require_task': True, # 签到前须先完成至少一个学习任务
     'streak_bonus_per_day': 0,    # 连续签到每日奖励（0=关闭）
     'streak_bonus_cap': 10,       # 连续签到奖励封顶天数
+    'step_en_hint_words': 3,       # Step5(中译英) 提示：每次随机显示的单词数
+    'step_en_hint_changes': 5,     # Step5(中译英) 提示：最多可更换次数（足够多次即可揭示全句）
 }
 
 
@@ -346,10 +351,10 @@ def my_courses():
             'course_id': c.id,
             'title': c.title,
             'current_step': a.current_step,
-            'step_unlocks': {
+                'step_unlocks': {
                 '1': a.step_1_unlocked, '2': a.step_2_unlocked,
                 '3': a.step_3_unlocked, '4': a.step_4_unlocked,
-                '5': a.step_5_unlocked},
+                '5': a.step_5_unlocked, '6': a.step_6_unlocked},
             'completed_steps': a.completed_steps,
             'is_completed': a.is_completed,
             'unlock_mode': a.unlock_mode or 'free',
@@ -382,11 +387,15 @@ def course_sentences(course_id):
                                'full_text': course.full_text},
                        sentences=data,
                        all_mastered=all_mastered,
-                       total=len(sents))
+                       total=len(sents),
+                       en_hint={'words': get_setting('step_en_hint_words') or 3,
+                                'changes': get_setting('step_en_hint_changes') or 5})
     data = [serialize_sentence(s) for s in sents]
     return jsonify(course={'id': course.id, 'title': course.title,
                            'full_text': course.full_text},
-                   sentences=data, total=len(sents))
+                   sentences=data, total=len(sents),
+                   en_hint={'words': get_setting('step_en_hint_words') or 3,
+                            'changes': get_setting('step_en_hint_changes') or 5})
 
 
 def serialize_sentence(s):
@@ -410,7 +419,7 @@ def step_submit():
     sentence_id = data.get('sentence_id')
     step = int(data.get('step', 0))
     user_input = (data.get('user_input') or '').strip()
-    if step not in (1, 2, 3, 4, 5):
+    if step not in (1, 2, 3, 4, 5, 6):
         return jsonify(error='非法 step'), 400
     s = Sentence.query.get_or_404(sentence_id)
     key = resolve_api_key(u)
@@ -427,9 +436,13 @@ def step_submit():
         result['standard_answer'] = s.english
         return jsonify(**result)
 
+    if step == 4:
+        # 跟读（Step4）为纯听读练习，不评分、无需提交
+        return jsonify(error='跟读步骤无需提交'), 400
+
     # 主动跳过：不评分/不调用 AI，直接判为未通过、记入错题（纳入下一轮复习），并返回标准答案
     if bool(data.get('skipped')):
-        if step == 5:
+        if step == 6:
             nxt = Sentence.query.filter_by(course_id=s.course_id) \
                 .filter(Sentence.sentence_order == s.sentence_order + 1).first()
             if not nxt:
@@ -475,7 +488,7 @@ def step_submit():
         _apply_step_result(u, s, step, correct, user_input, s.chinese, key, result,
                           base_url=proxy['base_url'], model=proxy['model'])
 
-    elif step == 4:
+    elif step == 5:
         # 中译英：本地英文单词对比优先；不通过再交给 DeepSeek 按完整度+准确度打分
         passed, matched, total = ds.local_english_match(user_input, s.english, s.target_words)
         ai = None
@@ -497,7 +510,7 @@ def step_submit():
         _apply_step_result(u, s, step, correct, user_input, s.english, key, result,
                           base_url=proxy['base_url'], model=proxy['model'])
 
-    elif step == 5:
+    elif step == 6:
         # 延展叙述：本地"含核心词+长度≤20"优先；否则交给 DeepSeek 评连贯+完整准确
         nxt = Sentence.query.filter_by(course_id=s.course_id) \
             .filter(Sentence.sentence_order == s.sentence_order + 1).first()
@@ -570,8 +583,8 @@ def step_finish():
     awards = []
     if step not in (a.completed_steps or []):
         a.completed_steps = (a.completed_steps or []) + [step]
-        # 仅 Step 2~5 有评分，才发放通关/完美奖励（Step1 为纯浏览）；强制解锁不发奖励
-        if step >= 2 and not forced:
+        # 仅评分步骤（SCORED_STEPS）发放通关/完美奖励；跟读(4)与沉浸(1)为非评分练习；强制解锁不发奖励
+        if step in SCORED_STEPS and not forced:
             add_coins(u.id, 1, f'Step{step}通关奖励', category='study')
             awards.append('Step通关 +1')
             # 首次完美：必须一次性全对（无重做）才发放奖励
@@ -581,12 +594,12 @@ def step_finish():
                 add_coins(u.id, 3, f'Step{step}完美通关奖励', category='study')
                 awards.append('完美通关 +3')
         # 解锁下一步
-        if step < 5:
+        if step < 6:
             setattr(a, f'step_{step+1}_unlocked', True)
             a.current_step = max(a.current_step or 1, step + 1)
             unlocked_next = True
         # 全部通关：标记完成（不再发"课程全通"额外奖励，每个步骤已奖励过）
-        if set(a.completed_steps or []) >= {2, 3, 4, 5}:
+        if set(a.completed_steps or []) >= {2, 3, 5, 6}:
             a.is_completed = True
     db.session.commit()
     return jsonify(passed=True, forced=forced, unlocked_next=unlocked_next,
@@ -606,7 +619,7 @@ def review_flashcards():
         s = Sentence.query.get(w.sentence_id)
         if not s:
             continue
-        mode = 'zh2en' if w.step in (4, 5) else 'en2zh'
+        mode = 'zh2en' if w.step in (5, 6) else 'en2zh'
         out.append({
             'wrong_id': w.id, 'sentence_id': w.sentence_id, 'step': w.step,
             'mode': mode, 'english': s.english, 'chinese': s.chinese,
@@ -628,9 +641,9 @@ def review_submit():
     s = Sentence.query.get(w.sentence_id)
     key = resolve_api_key(u)
     proxy = get_ai_proxy()
-    if step in (4, 5):
-        correct = ds.check_svo(user_input, s.svo) if step == 4 else True
-        if step == 5:
+    if step in (5, 6):
+        correct = ds.check_svo(user_input, s.svo) if step == 5 else True
+        if step == 6:
             correct = True  # 复习模式宽松判通过
     else:
         sim = ds.score_similarity(key, user_input, s.chinese,
@@ -802,7 +815,7 @@ def student_report(student_id):
             continue
         sents = Sentence.query.filter_by(course_id=c.id).all()
         per_step = {}
-        for st in (2, 3, 4, 5):
+        for st in (2, 3, 4, 5, 6):
             vals = []
             for s in sents:
                 prof = db.session.query(StudentSentenceProgress.proficiency) \
@@ -1282,7 +1295,7 @@ def assign_course():
             # 覆盖重置进度
             a.current_step = 1
             a.step_1_unlocked = True
-            a.step_2_unlocked = a.step_3_unlocked = a.step_4_unlocked = a.step_5_unlocked = False
+            a.step_2_unlocked = a.step_3_unlocked = a.step_4_unlocked = a.step_5_unlocked = a.step_6_unlocked = False
             a.is_completed = False
             a.completed_steps = []
             a.perfect_steps = []

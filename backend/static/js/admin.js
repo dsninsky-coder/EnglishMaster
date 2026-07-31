@@ -673,6 +673,15 @@ async function loadSettingsTab() {
       <input id="set_cap" type="number" value="${s.streak_bonus_cap ?? 10}" /></label>
     <p class="hint">连续签到奖励 = 每日奖励 × min(连续天数, 封顶天数)，仅在连续 ≥2 天且每日奖励&gt;0 时发放。</p>
     <button class="btn block" style="margin-top:8px" onclick="saveSettings()">保存设置</button>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <h3>Step5（中译英）提示设置</h3>
+    <label class="field"><span>提示每次随机显示的单词数</span>
+      <input id="set_en_hint_words" type="number" min="1" value="${s.step_en_hint_words ?? 3}" /></label>
+    <label class="field"><span>最多可更换提示次数</span>
+      <input id="set_en_hint_changes" type="number" min="1" value="${s.step_en_hint_changes ?? 5}" /></label>
+    <p class="hint">学生在中译英时可使用「换一批提示」：每次随机揭示若干个单词，更换若干次后即可看到完整英文答案。单词数越少、可更换次数越多，揭示越慢。</p>
+    <button class="btn block" style="margin-top:8px" onclick="saveSettings()">保存设置</button>
   </div>`
 }
 async function saveSettings() {
@@ -681,6 +690,8 @@ async function saveSettings() {
     checkin_require_task: el('set_reqtask').checked,
     streak_bonus_per_day: parseInt(el('set_perday').value || '0', 10),
     streak_bonus_cap: parseInt(el('set_cap').value || '10', 10),
+    step_en_hint_words: Math.max(1, parseInt(el('set_en_hint_words').value || '3', 10)),
+    step_en_hint_changes: Math.max(1, parseInt(el('set_en_hint_changes').value || '5', 10)),
   }
   const r = await api('/admin/settings', 'POST', payload)
   if (!r.ok) { toast(r.data.error || '保存失败', true); return }
