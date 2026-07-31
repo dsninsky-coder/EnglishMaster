@@ -84,12 +84,15 @@ function adminFrame(inner, activeTab) {
   const tabs = [
     ['courses', '🎧 听说管理'], ['words', '📚 单词管理'],
     ['rewards', '🎁 奖励管理'], ['students', '👥 学员管理'],
-    ['system', '🛠️ 系统工具'],
+    ['appeals', '⚖️ 人工附议'], ['system', '🛠️ 系统工具'],
   ]
   const labels = {}
   tabs.forEach(([k, l]) => { labels[k] = l })
-  const nav = tabs.map(([k, l]) =>
-    `<a class="admin-nav-item ${activeTab === k ? 'active' : ''}" href="#/admin/${k}">${l}</a>`).join('')
+  const nav = tabs.map(([k, l]) => {
+    const badge = k === 'appeals'
+      ? ` <span id="appealBadge" style="display:none;background:#e74c3c;color:#fff;border-radius:10px;padding:0 6px;font-size:11px;margin-left:4px"></span>` : ''
+    return `<a class="admin-nav-item ${activeTab === k ? 'active' : ''}" href="#/admin/${k}">${l}${badge}</a>`
+  }).join('')
   const u = getUser() || {}
   return `<div class="app admin-app">
     <aside class="admin-side">

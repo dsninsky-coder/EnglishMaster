@@ -97,6 +97,11 @@ class CourseAssignment(db.Model):
     completion_awarded = db.Column(db.Boolean, default=False)
     # 解锁式学习：free=自由学习（已解锁即可开始）/ locked=解锁式（需完成上一门才解锁下一门）
     unlock_mode = db.Column(db.String(16), default='free')
+    # 人工附议：被驳回后课程重新上锁，需重学该步
+    appeal_locked = db.Column(db.Boolean, default=False)
+    # 附议待审期间，本步奖励暂扣；appeal_suppressed 存 [step]，appeal_suppressed_perfect 存 {step: 是否完美}
+    appeal_suppressed = db.Column(db.JSON, default=list)
+    appeal_suppressed_perfect = db.Column(db.JSON, default=dict)
 
     __table_args__ = (db.UniqueConstraint('student_id', 'course_id', name='uq_assignment'),)
 
@@ -152,6 +157,28 @@ class CoinTransaction(db.Model):
     category = db.Column(db.String(20), nullable=True)      # checkin/study/reward/penalty/shop/wish/support/refund
     operator_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)  # 操作管理员
     created_at = db.Column(db.DateTime, default=utcnow)
+
+
+class Appeal(db.Model):
+    """学生人工附议（对系统判错的题目申请人工复核）。
+
+    - 学生答错后申请，花费 2 金币；题目暂记为"默认通过"以便继续；
+    - 管理员判定：通过(学生没错)→ 返还 2 金币、补发本步被暂扣奖励、标记该句掌握；
+      驳回(系统没错)→ 没收 2 金币、课程重新上锁(仅该错误步需重学)。
+    """
+    __tablename__ = 'appeals'
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    course_id = db.Column(db.Integer, db.ForeignKey('courses.id'), nullable=False, index=True)
+    step = db.Column(db.Integer, nullable=False)
+    sentence_id = db.Column(db.Integer, db.ForeignKey('sentences.id'), nullable=True)  # Step7 单词巩固可为空
+    student_answer = db.Column(db.Text, nullable=True)
+    standard_answer = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(16), default='pending')   # pending / approved / rejected
+    admin_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    admin_note = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=utcnow)
+    resolved_at = db.Column(db.DateTime, nullable=True)
 
 
 class ShopItem(db.Model):

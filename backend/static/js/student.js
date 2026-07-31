@@ -175,6 +175,8 @@ async function renderLearn(courseId) {
     allowSkip: !!(cr.ok && cr.data.allow_skip),   // 该生是否被管理员允许"强制解锁下一步"
     enHint: r.data.en_hint || { words: 3, changes: 5 },  // 中译英提示配置（管理员后台设置）
     words: [], wordResults: [], wordIdx: 0,   // Step7 单词巩固状态
+    appealLocked: !!courseInfo.appeal_locked, appealLockStep: courseInfo.appeal_lock_step || null,
+    appealedSet: new Set(),   // 已申请附议的句子/单词，防重复
   }
   drawLearn()
 }
@@ -190,7 +192,13 @@ function drawLearn() {
     const cls = learn.step === n ? 'active' : (locked ? 'locked' : 'done')
     return `<div class="step-pill ${cls}" ${locked ? '' : `onclick="goStep(${n})"`}>${locked ? '🔒 ' : ''}Step ${n} · ${STEP_NAMES[n]}</div>`
   }).join('')
+  const banner = learn.appealLocked
+    ? `<div class="card" style="border:1px solid #e74c3c;background:#fff5f5">
+         <b>⚠️ 课程已锁定</b>
+         <p class="muted" style="margin-top:6px">人工附议被驳回，需重新完成 <b>Step ${learn.appealLockStep}</b> 才能解锁后续内容。已完成的步骤不受影响。</p>
+       </div>` : ''
   el('app').innerHTML = studentFrame(`
+    ${banner}
     <div class="card">
       <h3>${esc(learn.course.title)}</h3>
       <div class="muted">共 ${total} 句${learn.sentences.length < (learn.course_sentence_total || total) ? '（优先练习未掌握句）' : ''}</div>
@@ -209,6 +217,9 @@ function drawLearn() {
 }
 
 function goStep(n, skipFull) {
+  if (learn.appealLocked && n > learn.appealLockStep) {
+    toast('课程已锁定，请先重新完成 Step ' + learn.appealLockStep, true); return
+  }
   if (n > 0 && !learn.unlocks[String(n)]) { toast('该步骤尚未解锁', true); return }
   // 进入步骤6（续写）之前，先展示全文回顾（预学），每次进入都显示
   if (n === 6 && !skipFull) { drawFullText(el('step-body')); return }
@@ -358,7 +369,7 @@ function drawStepN(body) {
     </div>`
   }
   const totalQ = learn.queue.length
-  const showSkip = (step === 2 || step === 5 || step === 6)
+  const showSkip = (step === 2 || step === 3 || step === 5 || step === 6)
   body.innerHTML = `<div class="card">
     <div class="spread">
       <span class="muted">第 ${learn.idx + 1}/${totalQ} 句 · Step ${step}${learn.passNo > 1 ? ' · 第' + learn.passNo + '轮' : ''}</span>
@@ -499,14 +510,37 @@ async function submitStepN(sentenceId, step) {
   const fb = el('fb')
   const std = d.standard_answer || ''
   let head, cls
-  if (d.correct) { head = '✅ 正确！'; cls = 'ok' }
-  else { head = '🙂 再体会一下'; cls = 'retry' }
+  if (d.correct) { head = '✅ 正确！'; cls = 'ok'; playTone('ok') }
+  else { head = '🙂 再体会一下'; cls = 'retry'; playTone('err') }
   let extra = ''
   if (step === 4 && d.local_match) extra += `<br/><span class="muted">本地匹配 ${esc(d.local_match)}</span>`
   if (!d.correct) extra += `<br/>标准答案：${esc(std)}${d.error_type ? '<br/>提示：' + esc(d.error_type) : ''}`
   const lastOfPass = learn.idx + 1 >= learn.queue.length
+  let appealBtn = ''
+  if (!d.correct && [2, 3, 5, 6].includes(step) && !learn.appealedSet.has(sentenceId)) {
+    appealBtn = `<button class="btn ghost block" style="margin-top:8px" id="appealBtn"
+      onclick="appealSentence(${sentenceId}, ${step}, '${esc(std)}')">⚖️ 申请人工附议（花费 2 金币）</button>`
+  }
   fb.innerHTML = `<div class="feedback ${cls}">${head}${extra}</div>
+    ${appealBtn}
     <button class="btn block" style="margin-top:10px" onclick="afterStepSubmit()">${lastOfPass ? '本轮结束 →' : '下一句 →'}</button>`
+}
+
+/* 学生申请人工附议：扣 2 金币，该题暂记通过以便继续 */
+async function appealSentence(sentenceId, step, std) {
+  const uin = (el('uin') && el('uin').value || '').trim()
+  const btn = el('appealBtn')
+  if (btn) { btn.disabled = true; btn.textContent = '申请中…' }
+  const r = await api('/step/appeal', 'POST', { sentence_id: sentenceId, step, user_input: uin, standard_answer: std })
+  if (!r.ok) {
+    toast(r.data.error || '申请失败', true)
+    if (btn) { btn.disabled = false; btn.textContent = '⚖️ 申请人工附议（花费 2 金币）' }
+    return
+  }
+  toast(r.data.message || '已申请人工附议', false)
+  if (learn.curSentIdx != null) learn.wrongSet.delete(learn.curSentIdx)
+  learn.appealedSet.add(sentenceId)
+  afterStepSubmit()
 }
 
 /* ============ Step7 单词巩固（v0.6：整表乱序 → 每批10个顺序取 → 音汉/英汉交替） ============ */
@@ -591,7 +625,9 @@ async function judgeWord(i) {
     learn.wordTotal = (learn.wordTotal || 0) + 1
     playTone('err')
     const added = d.added_error ? '<div class="muted" style="margin-top:4px">📕 已自动加入生词表</div>' : ''
-    wr.innerHTML = `<div class="feedback retry" style="margin-top:6px">❌ 不正确<br/><b>解析：</b>${esc(d.reason || '与标准意思有差异，请对照学习。')}</div>${added}`
+    const appealed = learn.appealedSet.has('w' + i)
+    const appealBtn = appealed ? '' : `<button class="btn ghost sm" style="margin-top:6px" id="wapp_${i}" onclick="appealWord(${i}, '${esc(it.word)}')">⚖️ 人工附议(2金币)</button>`
+    wr.innerHTML = `<div class="feedback retry" style="margin-top:6px">❌ 不正确<br/><b>解析：</b>${esc(d.reason || '与标准意思有差异，请对照学习。')}</div>${added}${appealBtn}`
     el('wc_' + i).classList.add('wrong')
   } else {
     learn.wordTotal = (learn.wordTotal || 0) + 1
@@ -609,6 +645,29 @@ function finishStep7() {
   const acc = total ? correct / total : 0
   const perfect = total > 0 && correct === total
   finishStep(7, acc, perfect)
+}
+
+/* Step7 单词巩固：学生对判错的单词申请人工附议（2 金币），暂记通过 */
+async function appealWord(i, word) {
+  const it = learn.wordItems[i]
+  const ans = (el('wa_' + i).value || '').trim()
+  const btn = el('wapp_' + i)
+  if (btn) { btn.disabled = true; btn.textContent = '申请中…' }
+  const r = await api('/step/appeal', 'POST',
+    { sentence_id: null, course_id: learn.courseId, step: 7, user_input: ans, standard_answer: word })
+  if (!r.ok) {
+    toast(r.data.error || '申请失败', true)
+    if (btn) { btn.disabled = false; btn.textContent = '⚖️ 人工附议(2金币)' }
+    return
+  }
+  toast(r.data.message || '已申请人工附议', false)
+  it.answered = true; it.correct = true; it.appeal = true
+  learn.wordCorrectTotal = (learn.wordCorrectTotal || 0) + 1
+  learn.wordTotal = (learn.wordTotal || 0) + 1
+  learn.appealedSet.add('w' + i)
+  el('wr_' + i).innerHTML = `<div class="feedback ok" style="margin-top:6px">✅ 已申请人工附议，暂记通过，等待审核</div>`
+  el('wc_' + i).classList.add('done')
+  if (learn.wordItems.every(x => x.answered)) { const fb = el('wnext'); if (fb) fb.disabled = false }
 }
 
 let _audioCtx = null
@@ -763,11 +822,15 @@ async function finishStep(step, accuracy, perfect) {
   } else {
     toast('已记录进度')
   }
-  // 刷新解锁状态
+  // 刷新解锁状态与人工附议重锁状态
   const cr = await api('/courses')
   if (cr.ok) {
     const info = (cr.data.courses || []).find(c => String(c.course_id) === String(learn.courseId))
-    if (info) learn.unlocks = info.step_unlocks || learn.unlocks
+    if (info) {
+      learn.unlocks = info.step_unlocks || learn.unlocks
+      learn.appealLocked = !!info.appeal_locked
+      learn.appealLockStep = info.appeal_lock_step || null
+    }
   }
   // 步骤6/7完成：记录进度后自动返回首页（课程浏览界面）
   if (step === 6 || step === 7) {

@@ -207,6 +207,20 @@ def migrate():
             db.session.commit()
             print('已为 course_assignments 增加 step_7_unlocked 列。')
         # db.create_all() 已建单词大师新表（word_lists / words / word_user_states / word_exam_configs）
+        # course_assignments: 增加人工附议相关列（appeal_locked / appeal_suppressed / appeal_suppressed_perfect）
+        aacols = [r[1] for r in db.session.execute(
+            text("PRAGMA table_info(course_assignments)")).fetchall()]
+        for col, ctype in [
+            ('appeal_locked', 'BOOLEAN'),
+            ('appeal_suppressed', 'JSON'),
+            ('appeal_suppressed_perfect', 'JSON'),
+        ]:
+            if col not in aacols:
+                db.session.execute(text(
+                    f"ALTER TABLE course_assignments ADD COLUMN {col} {ctype}"))
+                db.session.commit()
+                print(f'已为 course_assignments 增加 {col} 列。')
+        # appeals 表由 db.create_all() 自动建表（新增模型，无需手动迁移）
 
 
 def seed_demo():

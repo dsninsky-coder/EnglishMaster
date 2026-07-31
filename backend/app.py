@@ -22,7 +22,7 @@ from sqlalchemy import func, distinct
 import models
 from models import db, User, AdminShareKey, Course, Sentence, CourseAssignment, \
     StudentSentenceProgress, WrongAnswer, CoinTransaction, ShopItem, PurchaseOrder, \
-    Wish, WishSupport, SystemSetting, CourseWord
+    Wish, WishSupport, SystemSetting, CourseWord, Appeal
 from word_data import WordDataManager
 import deepseek_client as ds
 
@@ -135,6 +135,10 @@ def role_required(role):
         wrapper.__name__ = fn.__name__
         return wrapper
     return decorator
+
+
+def admin_only(fn):
+    return jwt_required()(role_required('admin')(fn))
 
 
 def resolve_api_key(user):
@@ -389,6 +393,8 @@ def my_courses():
                 status = 'start'         # 开始（自由学习，已解锁）
             else:
                 status = 'start' if i == first_incomplete else 'locked'  # 未解锁（待解锁）
+        if a.appeal_locked:
+            status = 'start'   # 附议重锁课程仍可进入重学被锁步骤
         out.append({
             'assignment_id': a.id,
             'course_id': c.id,
@@ -404,6 +410,8 @@ def my_courses():
             'unlock_mode': a.unlock_mode or 'free',
             'status': status,
             'is_unlocked': status != 'locked',
+            'appeal_locked': bool(a.appeal_locked),
+            'appeal_lock_step': a.current_step if a.appeal_locked else None,
         })
     return jsonify(courses=out, allow_skip=bool(u.allow_skip))
 
@@ -413,6 +421,10 @@ def my_courses():
 def course_sentences(course_id):
     u = current_user()
     course = Course.query.get_or_404(course_id)
+    # 人工附议重锁状态（学生端进入课程时用于拦截）
+    asm = CourseAssignment.query.filter_by(student_id=u.id, course_id=course_id).first() if u.role == 'student' else None
+    appeal_locked = bool(asm and asm.appeal_locked)
+    appeal_lock_step = asm.current_step if appeal_locked else None
     # 数据加载：优先返回未掌握(proficiency<80)的句子
     sents = Sentence.query.filter_by(course_id=course_id) \
         .order_by(Sentence.sentence_order).all()
@@ -432,6 +444,7 @@ def course_sentences(course_id):
                        sentences=data,
                        all_mastered=all_mastered,
                        total=len(sents),
+                       appeal_locked=appeal_locked, appeal_lock_step=appeal_lock_step,
                        en_hint={'words': get_setting('step_en_hint_words') or 3,
                                 'changes': get_setting('step_en_hint_changes') or 5})
     data = [serialize_sentence(s) for s in sents]
@@ -688,16 +701,33 @@ def step_finish():
     awards = []
     if step not in (a.completed_steps or []):
         a.completed_steps = (a.completed_steps or []) + [step]
+        # 该步是否存在待审附议：存在则先暂扣本步奖励，待管理员裁决后补发
+        has_pending_appeal = Appeal.query.filter_by(
+            student_id=u.id, course_id=course_id, step=step, status='pending').first() is not None
         # 仅评分步骤（SCORED_STEPS）发放通关/完美奖励；跟读(4)与沉浸(1)为非评分练习；强制解锁不发奖励
         if step in SCORED_STEPS and not forced:
-            add_coins(u.id, 1, f'Step{step}通关奖励', category='study')
-            awards.append('Step通关 +1')
-            # 首次完美：必须一次性全对（无重做）才发放奖励
-            if perfect and step not in (a.perfect_steps or []):
-                a.perfect_steps = (a.perfect_steps or []) + [step]
-                u.total_perfect_steps = (u.total_perfect_steps or 0) + 1
-                add_coins(u.id, 3, f'Step{step}完美通关奖励', category='study')
-                awards.append('完美通关 +3')
+            if has_pending_appeal:
+                supp = list(a.appeal_suppressed or [])
+                if step not in supp:
+                    supp.append(step)
+                a.appeal_suppressed = supp
+                perf_map = dict(a.appeal_suppressed_perfect or {})
+                perf_map[str(step)] = bool(perfect)
+                a.appeal_suppressed_perfect = perf_map
+                awards.append('附议待审·奖励暂扣')
+            else:
+                add_coins(u.id, 1, f'Step{step}通关奖励', category='study')
+                awards.append('Step通关 +1')
+                # 首次完美：必须一次性全对（无重做）才发放奖励
+                if perfect and step not in (a.perfect_steps or []):
+                    a.perfect_steps = (a.perfect_steps or []) + [step]
+                    u.total_perfect_steps = (u.total_perfect_steps or 0) + 1
+                    add_coins(u.id, 3, f'Step{step}完美通关奖励', category='study')
+                    awards.append('完美通关 +3')
+        # 若该步已无待审附议，解除课程重锁（重学通过）
+        if a.appeal_locked and not Appeal.query.filter_by(
+                student_id=u.id, course_id=course_id, step=step, status='pending').first():
+            a.appeal_locked = False
         # 解锁下一步
         if step < 7:
             setattr(a, f'step_{step+1}_unlocked', True)
@@ -710,6 +740,174 @@ def step_finish():
     return jsonify(passed=True, forced=forced, unlocked_next=unlocked_next,
                    awards=awards, balance=u.coin_balance,
                    completed_steps=a.completed_steps)
+
+
+# ---------------- 人工附议（学生申请 / 管理员裁决） ----------------
+APPEAL_COST = 2   # 每次人工附议消耗金币
+
+
+@app.route('/api/v1/step/appeal', methods=['POST'])
+@jwt_required()
+def step_appeal():
+    """学生对系统判错的题目申请人工附议（花费 2 金币）。
+
+    题目暂记为"默认通过"以便继续；奖励在 step_finish 时若该步存在待审附议则暂扣，
+    待管理员裁决后再补发（通过）或永久扣留（驳回）。
+    """
+    u = current_user()
+    data = request.get_json(silent=True) or {}
+    sentence_id = data.get('sentence_id')
+    step = int(data.get('step', 0))
+    user_input = (data.get('user_input') or '').strip()
+    standard_answer = (data.get('standard_answer') or '').strip()
+    if step not in (2, 3, 5, 6, 7):
+        return jsonify(error='该步骤不支持人工附议'), 400
+    s = Sentence.query.get(sentence_id) if sentence_id else None
+    course_id = s.course_id if s else data.get('course_id')
+    if not course_id:
+        return jsonify(error='缺少课程信息'), 400
+    # 防重复：同一题目同一学生同一待审附议不再扣费
+    dup = Appeal.query.filter_by(student_id=u.id, course_id=course_id, step=step, status='pending')
+    dup = dup.filter_by(sentence_id=sentence_id) if sentence_id else dup.filter(Appeal.sentence_id.is_(None))
+    if dup.first():
+        return jsonify(error='该题目已申请附议，等待审核中', already=True)
+    if (u.coin_balance or 0) < APPEAL_COST:
+        return jsonify(error=f'金币不足，无法申请人工附议（需 {APPEAL_COST} 金币）'), 400
+    add_coins(u.id, -APPEAL_COST, f'申请人工附议（Step{step}）', category='appeal')
+    db.session.add(Appeal(student_id=u.id, course_id=course_id, step=step,
+                          sentence_id=sentence_id, student_answer=user_input,
+                          standard_answer=standard_answer, status='pending'))
+    db.session.commit()
+    return jsonify(ok=True, cost=APPEAL_COST, balance=u.coin_balance,
+                   message=f'已申请人工附议，扣除 {APPEAL_COST} 金币，等待管理员审核')
+
+
+@app.route('/api/v1/admin/appeals', methods=['GET'])
+@admin_only
+def admin_appeals():
+    status = request.args.get('status', 'pending')
+    q = Appeal.query
+    if status and status != 'all':
+        q = q.filter_by(status=status)
+    rows = q.order_by(Appeal.created_at.desc()).all()
+    out = []
+    for a in rows:
+        stu = User.query.get(a.student_id)
+        course = Course.query.get(a.course_id)
+        s = Sentence.query.get(a.sentence_id) if a.sentence_id else None
+        out.append({
+            'id': a.id, 'student': stu.username if stu else '?',
+            'student_id': a.student_id, 'course': course.title if course else '?',
+            'course_id': a.course_id, 'step': a.step,
+            'sentence_en': s.english if s else (a.standard_answer or ''),
+            'sentence_cn': s.chinese if s else '',
+            'student_answer': a.student_answer, 'standard_answer': a.standard_answer,
+            'status': a.status, 'admin_note': a.admin_note,
+            'created_at': str(a.created_at),
+        })
+    return jsonify(appeals=out, total=len(out))
+
+
+@app.route('/api/v1/admin/appeals/pending-count', methods=['GET'])
+@admin_only
+def admin_appeals_pending_count():
+    return jsonify(count=Appeal.query.filter_by(status='pending').count())
+
+
+@app.route('/api/v1/admin/appeal/<int:appeal_id>/resolve', methods=['POST'])
+@admin_only
+def admin_appeal_resolve(appeal_id):
+    u = current_user()
+    a = Appeal.query.get_or_404(appeal_id)
+    if a.status != 'pending':
+        return jsonify(error='该附议已处理'), 400
+    data = request.get_json(silent=True) or {}
+    decision = data.get('decision')
+    note = (data.get('note') or '').strip()
+    if decision not in ('approved', 'rejected'):
+        return jsonify(error='decision 必须是 approved / rejected'), 400
+    a.status = decision
+    a.admin_id = u.id
+    a.admin_note = note
+    a.resolved_at = models.utcnow()
+    stu = User.query.get(a.student_id)
+
+    refund_amt = 0
+    bonus_amt = 0
+    if decision == 'approved':
+        # 学生没错：返还 2 金币 + 补发该步被暂扣奖励 + 标记该句掌握
+        add_coins(a.student_id, APPEAL_COST, '人工附议通过·返还金币', category='appeal', operator_id=u.id)
+        refund_amt = APPEAL_COST
+        if a.sentence_id:
+            p = get_progress(a.student_id, a.sentence_id, a.step)
+            p.proficiency = 100
+            p.is_mastered = True
+            p.last_reviewed = models.utcnow()
+        asm = CourseAssignment.query.filter_by(student_id=a.student_id, course_id=a.course_id).first()
+        if asm:
+            supp = list(asm.appeal_suppressed or [])
+            perf_map = dict(asm.appeal_suppressed_perfect or {})
+            if a.step in supp:
+                add_coins(a.student_id, 1, f'Step{a.step}通关奖励（附议通过补发）', category='study', operator_id=u.id)
+                bonus_amt += 1
+                if perf_map.get(str(a.step)) and a.step not in (asm.perfect_steps or []):
+                    asm.perfect_steps = (asm.perfect_steps or []) + [a.step]
+                    stu.total_perfect_steps = (stu.total_perfect_steps or 0) + 1
+                    add_coins(a.student_id, 3, f'Step{a.step}完美通关奖励（附议通过补发）', category='study', operator_id=u.id)
+                    bonus_amt += 3
+                supp = [x for x in supp if x != a.step]
+                asm.appeal_suppressed = supp
+                perf_map.pop(str(a.step), None)
+                asm.appeal_suppressed_perfect = perf_map
+            # 此步已无待审附议：解除课程重锁（若因本步驳回而上锁）
+            if asm.appeal_locked and not Appeal.query.filter_by(
+                    student_id=a.student_id, course_id=a.course_id, step=a.step, status='pending').first():
+                asm.appeal_locked = False
+    else:
+        # 学生错：2 金币已扣（申请时），课程重新上锁——仅该错误步需重学
+        asm = CourseAssignment.query.filter_by(student_id=a.student_id, course_id=a.course_id).first()
+        if asm:
+            cs = list(asm.completed_steps or [])
+            if a.step in cs:
+                cs = [x for x in cs if x != a.step]
+                asm.completed_steps = cs
+            ps = list(asm.perfect_steps or [])
+            if a.step in ps:
+                ps = [x for x in ps if x != a.step]
+                asm.perfect_steps = ps
+            asm.is_completed = False
+            asm.current_step = a.step
+            asm.appeal_locked = True
+            for k in range(a.step + 1, 8):
+                setattr(asm, f'step_{k}_unlocked', False)
+            supp = list(asm.appeal_suppressed or [])
+            if a.step in supp:
+                supp = [x for x in supp if x != a.step]
+                asm.appeal_suppressed = supp
+            perf_map = dict(asm.appeal_suppressed_perfect or {})
+            perf_map.pop(str(a.step), None)
+            asm.appeal_suppressed_perfect = perf_map
+    db.session.commit()
+    return jsonify(ok=True, decision=decision, refund=refund_amt, bonus=bonus_amt,
+                   balance=stu.coin_balance)
+
+
+@app.route('/api/v1/admin/extract-all-course-words', methods=['POST'])
+@admin_only
+def admin_extract_all_words():
+    """一键提取所有课程的单词（保留管理员手动添加的词，仅替换自动提取部分）。"""
+    courses = Course.query.order_by(Course.id).all()
+    total_words = 0
+    detail = []
+    for c in courses:
+        CourseWord.query.filter_by(course_id=c.id, is_custom=False).delete()
+        words = extract_course_words(c)
+        for w in words:
+            db.session.add(CourseWord(course_id=c.id, word=w, is_custom=False))
+        total_words += len(words)
+        detail.append({'id': c.id, 'title': c.title, 'words': len(words)})
+    db.session.commit()
+    return jsonify(ok=True, courses=len(courses), total_words=total_words, detail=detail)
 
 
 # ---------------- 全局闪电复习 (SRS) ----------------
@@ -968,9 +1166,6 @@ def student_report(student_id):
 
 
 # ================= 管理员接口 =================
-def admin_only(fn):
-    return jwt_required()(role_required('admin')(fn))
-
 
 @app.route('/api/v1/admin/share-key', methods=['POST'])
 @admin_only

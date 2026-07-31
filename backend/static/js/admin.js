@@ -7,7 +7,7 @@ function renderAdmin(tab) {
   const param = parts[2]
   let inner = ''
   // 各板块对应的父级 Tab（用于高亮）
-  const MAIN = ['courses', 'words', 'rewards', 'students', 'system']
+  const MAIN = ['courses', 'words', 'rewards', 'students', 'appeals', 'system']
   const parentOf = {
     coins: 'rewards', shop: 'rewards', wishes: 'rewards',
     report: 'system', db: 'system', api: 'system', account: 'system', settings: 'system',
@@ -41,6 +41,7 @@ function renderAdmin(tab) {
     inner = subTabs + `<div id="tab-body"><div class="empty">加载中…</div></div>`
   }
   else if (tab === 'students') inner = '<div id="tab-body"><div class="empty">加载中…</div></div>'
+  else if (tab === 'appeals') inner = adminAppealsInner()
   else if (tab === 'system') inner = adminSystemInner()
   else if (tab === 'coins') inner = '<div id="tab-body"><div class="empty">加载中…</div></div>'
   else if (tab === 'api') inner = '<div id="tab-body"><div class="empty">加载中…</div></div>'
@@ -53,6 +54,7 @@ function renderAdmin(tab) {
   else inner = adminCoursesInner()
 
   el('app').innerHTML = adminFrame(inner, parentTab)
+  refreshAppealBadge()
 
   if (tab === 'courses') loadCourseList()
   else if (tab === 'rewards') {
@@ -61,6 +63,7 @@ function renderAdmin(tab) {
     else loadAdminCoins()
   }
   else if (tab === 'students') loadStudents()
+  else if (tab === 'appeals') loadAppeals()
   else if (tab === 'coins') loadAdminCoins()
   else if (tab === 'api') loadApiTab()
   else if (tab === 'shop') loadShopTab()
@@ -91,6 +94,7 @@ function adminCoursesInner() {
       <div class="row">
         <button class="btn" onclick="scanAllAudio()">📂 扫描全部音频</button>
         <button class="btn" onclick="openBatchAssign()">📦 批量推送课程</button>
+        <button class="btn" onclick="extractAllCourseWords()">📚 一键提取所有课程单词</button>
       </div>
     </div>
     <p class="muted" style="font-size:13px">解析后课程即进入列表，可在此发布 / 撤销 / 分配 / 补充音频 / 检查错误 / 编辑 / 删除。一次给多名学生推送多门课程，请用右上角「批量推送」。</p>
@@ -98,6 +102,76 @@ function adminCoursesInner() {
     <div id="courseList"><div class="empty">加载中…</div></div>
   </div>`
 }
+/* ---------- 人工附议（学生申请 → 管理员裁决） ---------- */
+function adminAppealsInner() {
+  return `<div class="card">
+    <div class="spread">
+      <h3>⚖️ 人工附议</h3>
+      <div class="row">
+        <button class="btn ghost sm" onclick="loadAppeals('pending')">待处理</button>
+        <button class="btn ghost sm" onclick="loadAppeals('all')">全部</button>
+      </div>
+    </div>
+    <p class="muted" style="font-size:13px">学生答错后申请人工附议（花费 2 金币）。判定「学生正确」将返还金币并补发被暂扣的奖励、标记该句掌握；判定「学生错误」将没收金币并重新锁定课程（仅被锁步骤需重学，已完成步骤不受影响）。</p>
+    <div id="appealList"><div class="empty">加载中…</div></div>
+  </div>`
+}
+
+async function loadAppeals(status) {
+  status = status || 'pending'
+  const r = await api('/admin/appeals' + (status === 'all' ? '?status=all' : '?status=pending'))
+  const box = el('appealList')
+  if (!box) return
+  if (!r.ok) { box.innerHTML = '<div class="empty">加载失败</div>'; return }
+  const list = r.data.appeals || []
+  if (!list.length) { box.innerHTML = '<div class="empty">暂无附议</div>'; refreshAppealBadge(); return }
+  box.innerHTML = list.map(a => {
+    const resolved = a.status !== 'pending'
+    const actions = resolved
+      ? `<span class="muted">${a.status === 'approved' ? '✅ 已判学生正确' : '❌ 已判学生错误'}${a.admin_note ? '（' + esc(a.admin_note) + '）' : ''}</span>`
+      : `<div class="row" style="margin-top:8px">
+           <input id="anote_${a.id}" placeholder="审核备注（可选）" style="flex:2" />
+           <button class="btn sm" onclick="resolveAppeal(${a.id}, 'approved')">判学生正确</button>
+           <button class="btn ghost sm" onclick="resolveAppeal(${a.id}, 'rejected')">判学生错误</button>
+         </div>`
+    return `<div class="card" style="margin-top:12px">
+      <div class="spread"><b>${esc(a.student)}</b><span class="muted">Step ${a.step} · ${esc(a.course)} · ${a.created_at}</span></div>
+      <div style="margin-top:8px"><b>原句：</b>${esc(a.sentence_en)}${a.sentence_cn ? '（' + esc(a.sentence_cn) + '）' : ''}</div>
+      <div><b>学生答案：</b>${esc(a.student_answer || '（空）')}</div>
+      ${a.standard_answer ? `<div class="muted"><b>标准答案：</b>${esc(a.standard_answer)}</div>` : ''}
+      ${actions}
+    </div>`
+  }).join('')
+  refreshAppealBadge()
+}
+
+async function resolveAppeal(id, decision) {
+  const note = (el('anote_' + id) && el('anote_' + id).value) || ''
+  const r = await api('/admin/appeal/' + id + '/resolve', 'POST', { decision, note })
+  if (!r.ok) { toast(r.data.error || '操作失败', true); return }
+  toast(decision === 'approved' ? '已判学生正确：返还金币并补发奖励' : '已判学生错误：没收金币并重新锁定课程')
+  loadAppeals('pending')
+}
+
+async function refreshAppealBadge() {
+  const badge = el('appealBadge')
+  if (!badge) return
+  try {
+    const r = await api('/admin/appeals/pending-count')
+    const n = (r.ok && r.data.count) || 0
+    if (n > 0) { badge.textContent = '(' + n + ')'; badge.style.display = 'inline-block' }
+    else { badge.textContent = ''; badge.style.display = 'none' }
+  } catch (e) { /* 忽略 */ }
+}
+
+/* 一键提取所有课程单词（保留管理员手动添加的词） */
+async function extractAllCourseWords() {
+  if (!confirm('将遍历所有课程重新提取实词（保留手动添加的词），确定？')) return
+  const r = await api('/admin/extract-all-course-words', 'POST', {})
+  if (!r.ok) { toast(r.data.error || '提取失败', true); return }
+  toast(`已提取 ${r.data.courses} 门课程，共 ${r.data.total_words} 个单词`)
+}
+
 /* 批量推送：一次选多门课程 + 多名学生 */
 async function openBatchAssign() {
   const [cr, sr] = await Promise.all([api('/admin/courses'), api('/admin/students')])
