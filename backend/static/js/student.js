@@ -50,7 +50,7 @@ async function renderListenHome() {
     else coursesHtml = cs.map(c => {
       const status = c.status || (c.is_completed ? 'review' : 'start')
       const cur = c.current_step || 1
-      const pct = Math.round(((c.completed_steps || []).length / 7) * 100)
+      const pct = Math.round(((c.completed_steps || []).length / TOTAL_STEPS) * 100)
       let badge = '', btn
       if (status === 'locked') {
         badge = '<span class="tag danger">🔒 未解锁</span>'
@@ -64,7 +64,7 @@ async function renderListenHome() {
       return `<div class="card course-card">
         <div>
           <div style="font-weight:600">${esc(c.title)}</div>
-          <div class="muted" style="font-size:13px">${status === 'locked' ? '完成上一门课程后解锁' : '当前进度 Step ' + cur + '/5 · 已通关 ' + pct + '%'}</div>
+          <div class="muted" style="font-size:13px">${status === 'locked' ? '完成上一门课程后解锁' : '当前进度 Step ' + cur + '/' + TOTAL_STEPS + ' · 已通关 ' + pct + '%'}</div>
           ${badge}
         </div>
         ${btn}
@@ -182,6 +182,7 @@ async function renderLearn(courseId) {
 }
 
 const STEP_NAMES = {0: '词汇', 1: '沉浸', 2: '英译中', 3: '听音', 4: '跟读', 5: '中译英', 6: '续写', 7: '单词'}
+const TOTAL_STEPS = 7  // 闯关总步数（Step1~7）
 
 function drawLearn() {
   const total = learn.sentences.length
