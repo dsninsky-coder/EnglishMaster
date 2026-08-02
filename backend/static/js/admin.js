@@ -484,25 +484,49 @@ function refreshCardColors(card) {
     sw.title = c ? '已上色' : '黑色（不上色）'
   })
 }
-function unitRowHtml(u) {
+function unitRowHtml(u, sid) {
   const checked = u && u.content ? 'checked' : ''
   const en = (u && u.en) || ''
   const zh = (u && u.zh) || ''
   return `<div class="unit-row">
     <input class="a-en" value="${esc(en)}" placeholder="英文片段" />
-    <input class="a-zh" value="${esc(zh)}" placeholder="中文对应" />
-    <label><input type="checkbox" class="a-content" ${checked} onchange="refreshCardColors(this.closest('.align-card'))"> 上色</label>
+    <input class="a-zh" value="${esc(zh)}" placeholder="中文对应" oninput="alignCardCnPreview(${sid})" />
+    <label><input type="checkbox" class="a-content" ${checked} onchange="refreshCardColors(this.closest('.align-card'));alignCardCnPreview(${sid})"> 上色</label>
     <span class="swatch"></span>
     <button class="btn ghost sm" onclick="delAlignUnit(this)">删除</button>
   </div>`
 }
+// 学生端中文上色预览（读取编辑中的片段，复用与前端一致的渲染逻辑）
+function alignCardCnPreview(sid) {
+  const wrap = el('units_' + sid); if (!wrap) return
+  const card = wrap.closest('.align-card'); if (!card) return
+  const rows = [...card.querySelectorAll('.unit-row')]
+  const units = rows.map(r => ({
+    en: r.querySelector('.a-en').value,
+    zh: r.querySelector('.a-zh').value,
+    content: r.querySelector('.a-content').checked,
+  }))
+  const colors = alignColorsFor(units)
+  const colored = units.map((u, i) => ({ en: u.en, zh: u.zh, color: colors[i] }))
+  const cn = (card.querySelector('.ref .cn') || {}).textContent || ''
+  const prev = card.querySelector('.cn-preview')
+  if (prev) prev.innerHTML = alignChineseHtml(colored, cn)
+}
+// 初始渲染某句的中文预览（基于服务端返回的对齐数据）
+function alignChineseHtmlPreview(s) {
+  const units = (s.alignment && s.alignment.units) || []
+  const colors = alignColorsFor(units)
+  const colored = units.map((u, i) => ({ en: u.en, zh: u.zh, color: colors[i] }))
+  return alignChineseHtml(colored, s.chinese)
+}
 function alignCardHtml(s) {
   const units = (s.alignment && s.alignment.units) || []
-  const rows = units.map(u => unitRowHtml(u)).join('')
+  const rows = units.map(u => unitRowHtml(u, s.id)).join('')
   return `<div class="align-card" data-sid="${s.id}">
     <div class="spread"><b>第 ${s.sentence_order} 句</b> <button class="btn sm" onclick="saveAlignSentence(${s.id})">保存本句</button></div>
     <div class="ref">英文：<span class="en">${esc(s.english)}</span></div>
     <div class="ref">中文：<span class="cn">${esc(s.chinese)}</span></div>
+    <div class="ref" style="margin-top:4px">学生端预览：<span class="cn-preview align-cn-preview">${alignChineseHtmlPreview(s)}</span></div>
     <div class="units" id="units_${s.id}">${rows}</div>
     <button class="btn ghost sm" style="margin-top:6px" onclick="addAlignUnit(${s.id})">+ 增加片段</button>
   </div>`
@@ -518,7 +542,7 @@ async function loadAlignEditor(courseId) {
     <h3>🎨 词色标注校对 · #${courseId} ${esc(r.data.title || '')}</h3>
     <button class="btn ghost" onclick="nav('#/admin/courses')">← 返回课程列表</button>
   </div>
-  <p class="hint">逐句编辑英文片段与中文对应；勾选「上色」则该片段带颜色（英文与中文同色），不勾为黑色（虚词）。保存后学生端立即生效，无需重新推送课程。</p>`
+  <p class="hint">逐句编辑英文片段与中文对应；勾选「上色」则该片段带颜色（英文与中文同色），不勾为黑色（虚词）。保存后学生端立即生效，无需重新推送课程。<br><b>一个英文词对应中文里多个分散的字/词</b>时，在「中文对应」里用 <b>/</b> 或 <b>、</b> 分隔，例如 <code>near → 在/旁</code>，则中文句里「在」和「旁」分别上色、「…」保持黑色。下方“学生端预览”会实时显示效果。</p>`
   html += sents.map(s => alignCardHtml(s)).join('')
   box.innerHTML = html
   box.querySelectorAll('.align-card').forEach(refreshCardColors)
@@ -534,12 +558,13 @@ function addAlignUnit(sid) {
     <button class="btn ghost sm" onclick="delAlignUnit(this)">删除</button>`
   wrap.appendChild(div)
   refreshCardColors(wrap.closest('.align-card'))
+  alignCardCnPreview(sid)
 }
 function delAlignUnit(btn) {
   const row = btn.closest('.unit-row'); if (!row) return
   const card = row.closest('.align-card')
   row.remove()
-  if (card) refreshCardColors(card)
+  if (card) { refreshCardColors(card); alignCardCnPreview(card.dataset.sid) }
 }
 async function saveAlignSentence(sid) {
   const wrap = el('units_' + sid); if (!wrap) return

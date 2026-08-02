@@ -293,18 +293,30 @@ function alignEnglishHtml(units) {
     return `<span style="color:#555">${en}</span>`
   }).join(' ')
 }
+// 一个英文片段可对应中文里多个分散的片段，用 / 或 、 分隔（如 near → 在/旁）
+function alignChineseParts(zh) {
+  if (!zh) return []
+  return zh.split(/[/、]/).map(p => p.trim()).filter(Boolean)
+}
 function alignChineseHtml(units, chinese) {
-  // 贪心匹配：把每个 content 单元的 zh 片段在原中文句里（按长度从长到短）首次出现处上色，避免重叠
+  // 贪心匹配：把每个 content 单元的 zh 片段（支持 / 、 分隔的多段）在原中文句里（按长度从长到短）首次出现处上色，避免重叠
   const text = chinese || ''
   const matches = []
-  units.filter(u => u.color && u.zh).sort((a, b) => b.zh.length - a.zh.length).forEach(u => {
-    const zh = u.zh
-    let idx = text.indexOf(zh)
-    while (idx !== -1 && matches.some(m => idx < m.e && idx + zh.length > m.s)) {
-      idx = text.indexOf(zh, idx + 1)
-    }
-    if (idx !== -1) matches.push({ s: idx, e: idx + zh.length, color: u.color })
+  const jobs = []
+  units.filter(u => u.color && u.zh).forEach(u => {
+    alignChineseParts(u.zh).forEach(part => {
+      if (part) jobs.push({ part, color: u.color, len: part.length })
+    })
   })
+  jobs.sort((a, b) => b.len - a.len)
+  for (const job of jobs) {
+    const part = job.part
+    let idx = text.indexOf(part)
+    while (idx !== -1 && matches.some(m => idx < m.e && idx + part.length > m.s)) {
+      idx = text.indexOf(part, idx + 1)
+    }
+    if (idx !== -1) matches.push({ s: idx, e: idx + part.length, color: job.color })
+  }
   matches.sort((a, b) => a.s - b.s)
   let out = '', last = 0
   for (const m of matches) {

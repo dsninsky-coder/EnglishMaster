@@ -495,6 +495,12 @@ table.tbl td.ops .btn { margin: 2px 2px; }
 .align-card .ref { font-size: 14px; margin-top: 6px; color: var(--text-dim); }
 .align-card .ref .en { color: var(--text); font-weight: 600; }
 .align-card .ref .cn { color: var(--text); }
+.align-card .cn-preview {
+  display: inline-block; margin-top: 2px; padding: 6px 8px;
+  background: var(--surface-2); border: 1px dashed var(--line);
+  border-radius: 8px; color: var(--text); font-weight: 600; line-height: 1.7;
+}
+.align-card .cn-preview span { padding: 0 1px; }
 .align-card .units { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .unit-row {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
