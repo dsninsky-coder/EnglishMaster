@@ -51,6 +51,7 @@ function renderAdmin(tab) {
   else if (tab === 'report') inner = '<div id="tab-body"></div>'
   else if (tab === 'account') inner = adminAccountInner()
   else if (tab === 'settings') inner = '<div id="tab-body"><div class="empty">加载中…</div></div>'
+  else if (tab === 'align') inner = '<div id="alignEditor"><div class="empty">加载中…</div></div>'
   else inner = adminCoursesInner()
 
   el('app').innerHTML = adminFrame(inner, parentTab)
@@ -70,6 +71,7 @@ function renderAdmin(tab) {
   else if (tab === 'wishes') loadWishesTab()
   else if (tab === 'settings') loadSettingsTab()
   else if (tab === 'report') renderAdminReport(param)
+  else if (tab === 'align') loadAlignEditor(param)
 }
 
 /* ---------- 课程管理（两步上传） ---------- */
@@ -297,6 +299,7 @@ async function loadCourseList() {
           <button class="btn sm" onclick="scanCourseAudio(${c.id})">🔄 扫描</button>
           <button class="btn ghost sm" onclick="openCheckErrors(${c.id})">检查错误</button>
           <button class="btn ghost sm" onclick="openWordManager(${c.id})">单词</button>
+          <button class="btn ghost sm" onclick="openAlignEditor(${c.id})">校对标注</button>
           <button class="btn ghost sm" onclick="openEditCourse(${c.id})">编辑</button>
           <button class="btn danger sm" onclick="deleteCourse(${c.id}, '${esc(c.title)}')">删除</button>
         </td>
@@ -453,6 +456,117 @@ async function alignAll() {
   if (!r.ok) { toast(r.data.error || '标注失败', true); return }
   toast(r.data.message || '已全部标注')
   loadCourseList()
+}
+
+/* ============ 词色标注人工校对编辑器 ============ */
+const ALIGN_PALETTE = ['#e74c3c', '#2980b9', '#27ae60', '#e67e22', '#8e44ad', '#16a085', '#d35400', '#2c3e50']
+// 与后端一致：content 且 zh 非空的片段按出现顺序循环取色
+function alignColorsFor(units) {
+  const out = []; let idx = 0
+  for (const u of units) {
+    if (u.content && u.zh) { out.push(ALIGN_PALETTE[idx % ALIGN_PALETTE.length]); idx++ }
+    else out.push(null)
+  }
+  return out
+}
+function refreshCardColors(card) {
+  const rows = [...card.querySelectorAll('.unit-row')]
+  const units = rows.map(r => ({
+    en: r.querySelector('.a-en').value,
+    zh: r.querySelector('.a-zh').value,
+    content: r.querySelector('.a-content').checked,
+  }))
+  const colors = alignColorsFor(units)
+  rows.forEach((r, i) => {
+    const sw = r.querySelector('.swatch'); if (!sw) return
+    const c = colors[i]
+    sw.style.background = c || '#888'
+    sw.title = c ? '已上色' : '黑色（不上色）'
+  })
+}
+function unitRowHtml(u) {
+  const checked = u && u.content ? 'checked' : ''
+  const en = (u && u.en) || ''
+  const zh = (u && u.zh) || ''
+  return `<div class="unit-row">
+    <input class="a-en" value="${esc(en)}" placeholder="英文片段" />
+    <input class="a-zh" value="${esc(zh)}" placeholder="中文对应" />
+    <label><input type="checkbox" class="a-content" ${checked} onchange="refreshCardColors(this.closest('.align-card'))"> 上色</label>
+    <span class="swatch"></span>
+    <button class="btn ghost sm" onclick="delAlignUnit(this)">删除</button>
+  </div>`
+}
+function alignCardHtml(s) {
+  const units = (s.alignment && s.alignment.units) || []
+  const rows = units.map(u => unitRowHtml(u)).join('')
+  return `<div class="align-card" data-sid="${s.id}">
+    <div class="spread"><b>第 ${s.sentence_order} 句</b> <button class="btn sm" onclick="saveAlignSentence(${s.id})">保存本句</button></div>
+    <div class="ref">英文：<span class="en">${esc(s.english)}</span></div>
+    <div class="ref">中文：<span class="cn">${esc(s.chinese)}</span></div>
+    <div class="units" id="units_${s.id}">${rows}</div>
+    <button class="btn ghost sm" style="margin-top:6px" onclick="addAlignUnit(${s.id})">+ 增加片段</button>
+  </div>`
+}
+function openAlignEditor(courseId) { nav('#/admin/align/' + courseId) }
+async function loadAlignEditor(courseId) {
+  const box = el('alignEditor'); if (!box) return
+  const r = await api('/admin/course/' + courseId + '/sentences')
+  if (!r.ok) { box.innerHTML = `<div class="empty">${esc(r.data.error || '加载失败')}</div>`; return }
+  const sents = r.data.sentences || []
+  if (!sents.length) { box.innerHTML = '<div class="empty">该课程没有句子</div>'; return }
+  let html = `<div class="spread" style="margin-bottom:12px">
+    <h3>🎨 词色标注校对 · #${courseId} ${esc(r.data.title || '')}</h3>
+    <button class="btn ghost" onclick="nav('#/admin/courses')">← 返回课程列表</button>
+  </div>
+  <p class="hint">逐句编辑英文片段与中文对应；勾选「上色」则该片段带颜色（英文与中文同色），不勾为黑色（虚词）。保存后学生端立即生效，无需重新推送课程。</p>`
+  html += sents.map(s => alignCardHtml(s)).join('')
+  box.innerHTML = html
+  box.querySelectorAll('.align-card').forEach(refreshCardColors)
+}
+function addAlignUnit(sid) {
+  const wrap = el('units_' + sid); if (!wrap) return
+  const div = document.createElement('div')
+  div.className = 'unit-row'
+  div.innerHTML = `<input class="a-en" placeholder="英文片段" />
+    <input class="a-zh" placeholder="中文对应" />
+    <label><input type="checkbox" class="a-content" checked onchange="refreshCardColors(this.closest('.align-card'))"> 上色</label>
+    <span class="swatch"></span>
+    <button class="btn ghost sm" onclick="delAlignUnit(this)">删除</button>`
+  wrap.appendChild(div)
+  refreshCardColors(wrap.closest('.align-card'))
+}
+function delAlignUnit(btn) {
+  const row = btn.closest('.unit-row'); if (!row) return
+  const card = row.closest('.align-card')
+  row.remove()
+  if (card) refreshCardColors(card)
+}
+async function saveAlignSentence(sid) {
+  const wrap = el('units_' + sid); if (!wrap) return
+  const units = []
+  wrap.querySelectorAll('.unit-row').forEach(row => {
+    const en = row.querySelector('.a-en').value.trim()
+    const zh = row.querySelector('.a-zh').value.trim()
+    const content = row.querySelector('.a-content').checked
+    if (!en) return
+    units.push({ en, zh, content })
+  })
+  if (!units.length) { toast('至少保留一个英文片段', true); return }
+  const btn = event && event.target
+  if (btn) { btn.disabled = true; btn.textContent = '保存中…' }
+  const r = await api('/admin/sentence/' + sid + '/alignment', 'PUT', { units })
+  if (btn) { btn.disabled = false; btn.textContent = '保存本句' }
+  if (!r.ok) { toast(r.data.error || '保存失败', true); return }
+  toast('已保存第 ' + sid + ' 句')
+  // 用服务端返回的 alignment 刷新色块预览
+  const card = wrap.closest('.align-card')
+  const saved = (r.data.alignment && r.data.alignment.units) || []
+  const rows = [...card.querySelectorAll('.unit-row')]
+  rows.forEach((row, i) => {
+    const sw = row.querySelector('.swatch'); if (!sw) return
+    const c = saved[i] && saved[i].color
+    sw.style.background = c || '#888'
+  })
 }
 async function addWord(courseId) {
   const inp = el('wmNew'); const w = (inp.value || '').trim().toLowerCase()

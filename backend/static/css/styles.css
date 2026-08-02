@@ -486,3 +486,30 @@ table.tbl td.ops .btn { margin: 2px 2px; }
 .wm-row:last-child { border-bottom: none; }
 .wm-word { font-size: 16px; font-weight: 600; flex: 1; }
 
+
+/* 词色标注人工校对编辑器 */
+.align-card {
+  border: 1px solid var(--line); border-radius: 14px; padding: 14px;
+  margin-bottom: 14px; background: var(--surface);
+}
+.align-card .ref { font-size: 14px; margin-top: 6px; color: var(--text-dim); }
+.align-card .ref .en { color: var(--text); font-weight: 600; }
+.align-card .ref .cn { color: var(--text); }
+.align-card .units { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.unit-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 10px; padding: 8px 10px;
+}
+.unit-row .a-en { flex: 1 1 180px; min-width: 120px; }
+.unit-row .a-zh { flex: 1 1 180px; min-width: 120px; }
+.unit-row input[type=text], .unit-row .a-en, .unit-row .a-zh {
+  padding: 8px 10px; font-size: 15px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--text);
+}
+.unit-row input[type=checkbox] { width: auto; }
+.unit-row label { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--text-dim); }
+.unit-row .swatch {
+  width: 18px; height: 18px; border-radius: 50%; background: #888;
+  border: 1px solid rgba(255,255,255,.25); flex: 0 0 auto;
+}

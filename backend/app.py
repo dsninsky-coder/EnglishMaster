@@ -50,10 +50,18 @@ DEFAULT_SETTINGS = {
 }
 
 # ================= 系统版本与升级内容（登录页展示 / 数据兼容性参考） =================
-VERSION = 'v0.8.2'
+VERSION = 'v0.8.3'
 # 每个版本是否影响老数据：全部为非破坏性（仅新增列 / 受控数据重映射），无清库操作。
 # 详见 README「数据兼容性」一节；迁移前 init_db.py 会自动备份数据库。
 CHANGELOG = [
+    {'version': 'v0.8.3', 'date': '2026-08-02', 'title': '词色标注人工校对编辑器',
+     'items': [
+         '新增管理员「校对标注」入口（课程列表每课「校对标注」按钮，或 #/admin/align/<课程ID>）',
+         '逐句编辑英文片段、中文对应、是否上色（黑/彩切换）、增删片段；保存即写库，学生端刷新即生效，无需重推',
+         '后端：GET /admin/course/<id>/sentences（取句子+alignment）、PUT /admin/sentence/<id>/alignment（按句覆盖保存）',
+         '保存时上色规则与生成一致：content 且 zh 非空按出现顺序循环取色，虚词黑色',
+         '无数据库结构变更',
+     ]},
     {'version': 'v0.8.2', 'date': '2026-08-02', 'title': '词色标注优化：短语级切分 + 状态可视化',
      'items': [
          '切分粒度改为「自然意群/短语」：如 The farm / wakes up / on the wall / a rooster，不再逐词孤立切分',
@@ -2219,6 +2227,46 @@ def admin_align_all():
     db.session.commit()
     return jsonify(message=f'已全量生成 {total} 句词色标注', total=total)
 
+
+@app.route('/api/v1/admin/course/<int:course_id>/sentences', methods=['GET'])
+@admin_only
+def admin_course_sentences(course_id):
+    """返回课程下所有句子（含 alignment），供词色标注校对编辑器使用。"""
+    c = Course.query.get_or_404(course_id)
+    sents = Sentence.query.filter_by(course_id=course_id).order_by(Sentence.sentence_order).all()
+    return jsonify(title=c.title, sentences=[serialize_sentence(s) for s in sents])
+
+
+@app.route('/api/v1/admin/sentence/<int:sentence_id>/alignment', methods=['PUT'])
+@admin_only
+def admin_update_sentence_alignment(sentence_id):
+    """人工校对：覆盖单句的词色对齐 units（英文片段/中文对应/是否上色）。"""
+    s = Sentence.query.get_or_404(sentence_id)
+    data = request.get_json(silent=True) or {}
+    units = data.get('units')
+    if not isinstance(units, list):
+        return jsonify(error='units 必须是数组'), 400
+    norm = []
+    color_idx = 0
+    for it in units:
+        if not isinstance(it, dict):
+            continue
+        en = str(it.get('en') or '').strip()
+        if not en:
+            continue
+        zh = str(it.get('zh') or '').strip()
+        content = bool(it.get('content', bool(zh)))
+        color = None
+        if content and zh:
+            color = ALIGN_PALETTE[color_idx % len(ALIGN_PALETTE)]
+            color_idx += 1
+        norm.append({'en': en, 'pos': str(it.get('pos') or '').upper(),
+                     'content': content, 'color': color, 'zh': zh})
+    if not norm:
+        return jsonify(error='对齐不能为空（至少保留一个英文片段）'), 400
+    s.alignment = {'units': norm}
+    db.session.commit()
+    return jsonify(message='已保存', alignment=s.alignment)
 
 
 @app.route('/api/v1/admin/course/<int:course_id>/words', methods=['GET'])
