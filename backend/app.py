@@ -50,10 +50,19 @@ DEFAULT_SETTINGS = {
 }
 
 # ================= 系统版本与升级内容（登录页展示 / 数据兼容性参考） =================
-VERSION = 'v0.8.1'
+VERSION = 'v0.8.2'
 # 每个版本是否影响老数据：全部为非破坏性（仅新增列 / 受控数据重映射），无清库操作。
 # 详见 README「数据兼容性」一节；迁移前 init_db.py 会自动备份数据库。
 CHANGELOG = [
+    {'version': 'v0.8.2', 'date': '2026-08-02', 'title': '词色标注优化：短语级切分 + 状态可视化',
+     'items': [
+         '切分粒度改为「自然意群/短语」：如 The farm / wakes up / on the wall / a rooster，不再逐词孤立切分',
+         '上色规则由「按词性」改为「该片段有中文翻译即上色」，英文片段与中文同色一一对应，更利于建立中英意群链接',
+         '管理员课程列表新增「词色标注」列：显示 🎨 已标注 X/Y 或「未标注」',
+         '错误检查新增词色标注检查：列出未生成标注的句子序号，并可一键为本科目生成',
+         '新增「🎨 一键标注全部课程」按钮：相当于逐课点一遍，全量回填存量课程',
+         '无数据库结构变更',
+     ]},
     {'version': 'v0.8.1', 'date': '2026-08-02', 'title': '修复词色标注「未配置 AI 模型」报错',
      'items': [
          '根因：系统级 ai_proxy 设置此前只有 base_url/model，没有 API Key 字段；而词色标注生成去取「管理员个人 Key」，导致两头皆空必报错',
@@ -317,11 +326,11 @@ def extract_course_words(course):
 
 
 # ---------------- Step1 词色对齐（一次性 AI 生成，存库） ----------------
-# 调色板：按句子内实词出现顺序循环取色，英文词与对应中文片段同色；虚词黑色。
+# 调色板：按句子内「有中文对应的片段」顺序循环取色，英文片段与对应中文片段同色；无中文对应的功能词黑色。
 ALIGN_PALETTE = ['#e74c3c', '#2980b9', '#27ae60', '#e67e22',
                  '#8e44ad', '#16a085', '#d35400', '#2c3e50']
-# 这些词性视为实词（上色）；其余（DET/PRON/ADP/CONJ/AUX/PART/NUM/INTJ/PUNCT/OTHER）视为虚词（黑色）。
-ALIGN_CONTENT_POS = {'NOUN', 'PROPN', 'VERB', 'ADJ', 'ADV'}
+# 注：切分粒度由 AI 提示词控制（按自然意群/短语，而非逐词）；上色规则为「片段有中文翻译即上色」。
+ALIGN_CONTENT_POS = {'NOUN', 'PROPN', 'VERB', 'ADJ', 'ADV'}  # 保留供 pos 参考，上色不再依赖它
 
 
 def generate_alignment(english, chinese, user=None):
@@ -335,12 +344,18 @@ def generate_alignment(english, chinese, user=None):
         return None
     proxy = get_ai_proxy()
     system = (
-        "你是英语标注助手。给定一句英文和它的中文翻译，请把英文按原顺序拆成词序列（保留原文大小写，"
-        "标点可附着在词后或单独成词），对每个英文词给出：\n"
-        "1) pos：取其一 NOUN/PROPN/VERB/ADJ/ADV/DET/PRON/ADP/CONJ/AUX/PART/NUM/INTJ/PUNCT/OTHER；\n"
-        "2) zh：该英文词在中文翻译里对应的中文片段（只写对应那部分，不要整句；"
-        "若是中文里没有对应词的功能词如 the/a/of/is，则 zh 填空字符串）。\n"
-        "不要输出多余解释，只输出 JSON：{\"units\":[{\"en\":\"...\",\"pos\":\"...\",\"zh\":\"...\"}]}。"
+        "你是英语标注助手。给定一句英文和它的中文翻译，请按「自然意群 / 短语」把英文切分成若干片段"
+        "（不要逐词孤立切分），把功能词与其修饰的内容词合并到同一片段，例如：\n"
+        "- \"The farm\"、\"a rooster\" 作为一个片段（冠词不单独拆出）；\n"
+        "- \"wakes up\"、\"sings on\" 这类短语动词不拆开；\n"
+        "- \"on the wall\"、\"in the morning\" 这类介词短语作为一个片段。\n"
+        "每个片段给出：\n"
+        "1) en：该英文片段原文（保留大小写；片段内词之间用原空格，标点可附着在词后）；\n"
+        "2) zh：该片段在中文翻译里对应的中文片段（只写对应那部分，不要整句；"
+        "若此英文片段在中文里完全没有对应词，如冠词 the/a、系动词 is/am/are、纯并列连词，则 zh 填空字符串）；\n"
+        "3) pos：该片段中心词的词性，取其一 NOUN/PROPN/VERB/ADJ/ADV/DET/PRON/ADP/CONJ/AUX/PART/NUM/INTJ/PUNCT/OTHER。\n"
+        "要求：英文片段按原顺序拼接后必须等于原英文句（含空格与标点）；不要输出多余解释，"
+        "只输出 JSON：{\"units\":[{\"en\":\"...\",\"zh\":\"...\",\"pos\":\"...\"}]}。"
     )
     messages = [
         {"role": "system", "content": system},
@@ -359,9 +374,11 @@ def generate_alignment(english, chinese, user=None):
             continue
         pos = (u.get('pos') or 'OTHER').upper()
         zh = (u.get('zh') or '').strip()
-        content_flag = pos in ALIGN_CONTENT_POS
+        # 上色规则：片段在中文里有对应翻译（zh 非空）即视为有意群并上色；
+        # 纯功能词（无中文对应）保持黑色。这样短语级切分下，英文片段与中文同色一一对应。
+        content_flag = bool(zh)
         color = None
-        if content_flag and zh:
+        if content_flag:
             color = ALIGN_PALETTE[color_idx % len(ALIGN_PALETTE)]
             color_idx += 1
         units.append({'en': en, 'pos': pos, 'content': content_flag,
@@ -2117,10 +2134,13 @@ def admin_courses():
         audio = sum(1 for s in sents if s.audio_url)
         missing = [s.sentence_order for s in sents if not s.audio_url]
         has_error = any((not s.english) or (not s.chinese) for s in sents)
+        aligned = sum(1 for s in sents
+                      if isinstance(s.alignment, dict) and s.alignment.get('units'))
         out.append({
             'id': c.id, 'title': c.title, 'is_published': c.is_published,
             'sentence_count': total, 'audio_count': audio,
             'missing_audio': missing, 'has_error': has_error,
+            'aligned_count': aligned,
             'created_at': str(c.created_at),
         })
     return jsonify(courses=out)
@@ -2133,9 +2153,13 @@ def admin_course_errors(course_id):
     sents = Sentence.query.filter_by(course_id=course_id).order_by(Sentence.sentence_order).all()
     missing_audio = [s.sentence_order for s in sents if not s.audio_url]
     missing_fields = [s.sentence_order for s in sents if (not s.english) or (not s.chinese)]
+    missing_alignment = [s.sentence_order for s in sents
+                         if not (isinstance(s.alignment, dict) and s.alignment.get('units'))]
     return jsonify(course_id=course_id, title=c.title, total=len(sents),
                    missing_audio=missing_audio, missing_fields=missing_fields,
-                   has_error=(len(missing_fields) > 0))
+                   missing_alignment=missing_alignment,
+                   has_error=(len(missing_fields) > 0),
+                   has_alignment_issue=(len(missing_alignment) > 0))
 
 
 # ---------------- 课程单词库管理（v0.5 Step7 单词巩固） ----------------

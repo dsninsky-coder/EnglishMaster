@@ -270,16 +270,24 @@ async function loadCourseList() {
   if (!r.ok) { box.innerHTML = `<div class="empty">${esc(r.data.error || '')}</div>`; return }
   const cs = r.data.courses || []
   if (!cs.length) { box.innerHTML = '<div class="empty">还没有课程，先在上方解析 JSON 创建</div>'; return }
-  box.innerHTML = `<div class="tablewrap"><table class="tbl">
-    <tr><th>ID</th><th>标题</th><th>句子</th><th>音频</th><th>状态</th><th>操作</th></tr>
+  box.innerHTML = `<div style="margin-bottom:10px">
+      <button class="btn" onclick="alignAll()">🎨 一键标注全部课程</button>
+      <span class="muted" style="font-size:12px;margin-left:8px">逐课逐句生成词色标注（相当于逐课点一遍），可能需要一些时间</span>
+    </div>
+    <div class="tablewrap"><table class="tbl">
+    <tr><th>ID</th><th>标题</th><th>句子</th><th>音频</th><th>词色标注</th><th>状态</th><th>操作</th></tr>
     ${cs.map(c => {
       const audioTxt = `${c.audio_count}/${c.sentence_count}`
       const errMark = c.has_error ? ' ⚠️缺字段' : (c.missing_audio.length ? ' ⚠️缺音频' : ' ✅')
+      const alignTxt = c.aligned_count
+        ? `<span class="tag ok">🎨 ${c.aligned_count}/${c.sentence_count}</span>`
+        : `<span class="tag">未标注</span>`
       return `<tr>
         <td>${c.id}</td>
         <td>${esc(c.title)}</td>
         <td>${c.sentence_count}</td>
         <td>${audioTxt}${errMark}</td>
+        <td>${alignTxt}</td>
         <td>${c.is_published ? '<span class="tag ok">已发布</span>' : '<span class="tag">未发布</span>'}</td>
         <td class="ops">
           ${c.is_published ? `<button class="btn ghost sm" onclick="unpublishCourse(${c.id})">撤销</button>`
@@ -364,6 +372,12 @@ async function openCheckErrors(courseId) {
   msg += `<p class="muted">共 ${d.total} 句</p>`
   msg += d.missing_audio.length ? `<p>缺音频的句子序号：${d.missing_audio.join('、')}</p>` : '<p>✅ 音频齐全</p>'
   msg += d.missing_fields.length ? `<p class="error-box">缺字段(english/chinese)的句子序号：${d.missing_fields.join('、')}</p>` : '<p>✅ 字段完整</p>'
+  if (d.has_alignment_issue) {
+    msg += `<p class="error-box">未生成词色标注的句子序号：${d.missing_alignment.join('、')}</p>`
+    msg += `<div class="row" style="margin-top:8px"><button class="btn" onclick="alignCourse(${d.course_id});closeModal()">🎨 为本科目生成词色标注</button></div>`
+  } else {
+    msg += '<p>✅ 词色标注齐全</p>'
+  }
   modal(msg + `<div class="row" style="margin-top:10px"><button class="btn" onclick="closeModal()">关闭</button></div>`)
 }
 async function openEditCourse(courseId) {
@@ -428,6 +442,17 @@ async function alignCourse(courseId) {
   if (btn) { btn.disabled = false; btn.textContent = '🎨 生成词色标注' }
   if (!r.ok) { toast(r.data.error || '生成失败', true); return }
   toast(r.data.message || '已生成词色标注')
+  loadCourseList()
+}
+async function alignAll() {
+  if (!confirm('将对所有课程逐句生成词色标注（相当于逐课点一遍生成），可能耗时较长，确定继续？')) return
+  const btn = event && event.target
+  if (btn) { btn.disabled = true; btn.textContent = '标注中…（请稍候）' }
+  const r = await api('/admin/align-all', 'POST', {})
+  if (btn) { btn.disabled = false; btn.textContent = '🎨 一键标注全部课程' }
+  if (!r.ok) { toast(r.data.error || '标注失败', true); return }
+  toast(r.data.message || '已全部标注')
+  loadCourseList()
 }
 async function addWord(courseId) {
   const inp = el('wmNew'); const w = (inp.value || '').trim().toLowerCase()
