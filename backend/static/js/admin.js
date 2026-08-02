@@ -560,11 +560,13 @@ async function loadApiTab() {
   ${shareRows || '<div class="empty">暂无学生</div>'}
   <div class="card" style="margin-top:16px">
     <h3>🤖 AI 模型设置（全系统生效）</h3>
-    <p class="hint">设置后，听说大师与单词大师的 AI 判分都会使用此模型。只要兼容 OpenAI Chat Completions 接口的模型均可（DeepSeek / OpenAI / 通义 / 本地 vLLM 等）。</p>
+    <p class="hint">设置后，听说大师与单词大师的 AI 判分、以及词色标注生成都会使用此模型与 Key。只要兼容 OpenAI Chat Completions 接口的模型均可（DeepSeek / OpenAI / 通义 / 本地 vLLM 等）。留空 API Key 时，将回退使用学员个人/共享 Key。</p>
     <label style="display:block;margin-bottom:6px">API Base URL</label>
     <input id="aiBaseUrl" placeholder="https://api.deepseek.com/v1" style="margin-bottom:10px" />
     <label style="display:block;margin-bottom:6px">模型名称</label>
     <input id="aiModel" placeholder="deepseek-chat" style="margin-bottom:10px" />
+    <label style="display:block;margin-bottom:6px">API Key（全局兜底，可选）</label>
+    <input id="aiApiKey" type="password" placeholder="sk-...（留空则不设全局 Key）" style="margin-bottom:10px" />
     <button class="btn block" onclick="saveAiProxy()">保存 AI 模型设置</button>
   </div>`
   loadAiProxy()
@@ -572,16 +574,19 @@ async function loadApiTab() {
 async function loadAiProxy() {
   const r = await api('/admin/ai-proxy')
   if (!r.ok) return
-  const b = el('aiBaseUrl'), m = el('aiModel')
+  const b = el('aiBaseUrl'), m = el('aiModel'), k = el('aiApiKey')
   if (b && r.data.base_url) b.value = r.data.base_url
   if (m && r.data.model) m.value = r.data.model
+  if (k && r.data.api_key_set) k.placeholder = '已保存（如需更换请直接输入新 Key）'
 }
 async function saveAiProxy() {
-  const b = el('aiBaseUrl'), m = el('aiModel')
+  const b = el('aiBaseUrl'), m = el('aiModel'), k = el('aiApiKey')
   if (!b || !m) return
-  const r = await api('/admin/ai-proxy', 'POST', { base_url: b.value.trim(), model: m.value.trim() })
+  const payload = { base_url: b.value.trim(), model: m.value.trim() }
+  if (k && k.value.trim()) payload.api_key = k.value.trim()
+  const r = await api('/admin/ai-proxy', 'POST', payload)
   if (!r.ok) { toast(r.data.error || '保存失败', true); return }
-  toast(`已保存：${r.data.model} @ ${r.data.base_url}`)
+  toast(`已保存：${r.data.model} @ ${r.data.base_url}${r.data.api_key_set ? '（含全局 Key）' : '（无全局 Key）'}`)
 }
 async function addShareKey() {
   const v = el('newKey').value.trim()

@@ -50,10 +50,18 @@ DEFAULT_SETTINGS = {
 }
 
 # ================= 系统版本与升级内容（登录页展示 / 数据兼容性参考） =================
-VERSION = 'v0.8.0'
+VERSION = 'v0.8.1'
 # 每个版本是否影响老数据：全部为非破坏性（仅新增列 / 受控数据重映射），无清库操作。
 # 详见 README「数据兼容性」一节；迁移前 init_db.py 会自动备份数据库。
 CHANGELOG = [
+    {'version': 'v0.8.1', 'date': '2026-08-02', 'title': '修复词色标注「未配置 AI 模型」报错',
+     'items': [
+         '根因：系统级 ai_proxy 设置此前只有 base_url/model，没有 API Key 字段；而词色标注生成去取「管理员个人 Key」，导致两头皆空必报错',
+         '新增系统级 API Key：管理员「AI 模型设置」增加 API Key 输入框，存于 ai_proxy 设置，全系统兜底',
+         'resolve_api_key 优先级改为：分享 Key > 私有 Key > 系统级全局 Key > None，管理员生成标注/学员未配 Key 时自动用系统 Key',
+         '错误提示文案更正为「请在管理员『AI 模型设置』中填写 API Key」',
+         '无数据库结构变更，仅配置项扩展',
+     ]},
     {'version': 'v0.8.0', 'date': '2026-08-02', 'title': '稳定性与体验修复（7 项）',
      'items': [
          '会话过期：JWT 保持 30 天有效，并避免 401 重复跳转登录页死循环',
@@ -147,6 +155,7 @@ def get_ai_proxy():
     return {
         'base_url': (cfg.get('base_url') or '').strip() or 'https://api.deepseek.com/v1',
         'model': (cfg.get('model') or '').strip() or 'deepseek-chat',
+        'api_key': (cfg.get('api_key') or '').strip(),
     }
 
 
@@ -223,13 +232,20 @@ def admin_only(fn):
 
 
 def resolve_api_key(user):
-    """API 优先级：分享 Key > 私有 Key > None。"""
-    if user.shared_api_key_id:
+    """API 优先级：分享 Key > 私有 Key > 系统级全局 Key > None。
+
+    系统级 Key 由管理员在「AI 模型设置」中填写（存于 ai_proxy 设置），
+    作为全系统兜底：管理员自己做词色标注等系统操作、或学生未配个人 Key 时都能用。
+    """
+    if user and user.shared_api_key_id:
         sk = AdminShareKey.query.get(user.shared_api_key_id)
         if sk and sk.is_active:
             return sk.api_key_value
-    if user.private_api_key:
+    if user and user.private_api_key:
         return user.private_api_key
+    sys_key = get_ai_proxy().get('api_key')
+    if sys_key:
+        return sys_key
     return None
 
 
@@ -1461,7 +1477,7 @@ def set_share():
 @admin_only
 def get_ai_proxy_config():
     p = get_ai_proxy()
-    return jsonify(base_url=p['base_url'], model=p['model'])
+    return jsonify(base_url=p['base_url'], model=p['model'], api_key_set=bool(p['api_key']))
 
 
 @app.route('/api/v1/admin/ai-proxy', methods=['POST'])
@@ -1470,6 +1486,7 @@ def save_ai_proxy_config():
     data = request.get_json(silent=True) or {}
     base_url = (data.get('base_url') or '').strip()
     model = (data.get('model') or '').strip()
+    api_key = (data.get('api_key') or '').strip()
     if not base_url:
         return jsonify(error='Base URL 不能为空'), 400
     if not model:
@@ -1477,8 +1494,11 @@ def save_ai_proxy_config():
     # 兼容用户可能把 chat/completions 后缀一起填进来
     if base_url.rstrip('/').endswith('/chat/completions'):
         base_url = base_url.rstrip('/')[: -len('/chat/completions')]
-    set_setting('ai_proxy', {'base_url': base_url, 'model': model})
-    return jsonify(message='AI 代理已保存', base_url=base_url, model=model)
+    cfg = {'base_url': base_url, 'model': model}
+    if api_key:
+        cfg['api_key'] = api_key
+    set_setting('ai_proxy', cfg)
+    return jsonify(message='AI 代理已保存', base_url=base_url, model=model, api_key_set=bool(api_key))
 
 
 @app.route('/api/v1/admin/students', methods=['GET'])
@@ -2145,7 +2165,7 @@ def admin_align_course(course_id):
     """为某课程所有句子一次性生成词色对齐（覆盖已有 alignment）。"""
     u = current_user()
     if not resolve_api_key(u):
-        return jsonify(error='未配置 AI 模型，无法生成词色标注（请在系统设置填写 API Key）'), 400
+        return jsonify(error='未配置 AI 模型，无法生成词色标注（请在管理员「AI 模型设置」中填写 API Key）'), 400
     c = Course.query.get_or_404(course_id)
     sents = Sentence.query.filter_by(course_id=course_id).order_by(Sentence.sentence_order).all()
     done = 0
@@ -2164,7 +2184,7 @@ def admin_align_all():
     """全量回填：为所有课程的句子生成词色对齐（处理存量课程）。"""
     u = current_user()
     if not resolve_api_key(u):
-        return jsonify(error='未配置 AI 模型，无法生成词色标注（请在系统设置填写 API Key）'), 400
+        return jsonify(error='未配置 AI 模型，无法生成词色标注（请在管理员「AI 模型设置」中填写 API Key）'), 400
     total = 0
     for c in Course.query.all():
         for s in Sentence.query.filter_by(course_id=c.id).order_by(Sentence.sentence_order).all():
