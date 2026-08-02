@@ -447,28 +447,75 @@ function alignErrText(d) {
   }).join('\n')
   return (d.message ? d.message + '\n' : '') + lines
 }
+// 词色标注：后台串行队列。入队后立即返回，前端轮询进度与结果。
+let alignBusy = false
+let alignPolling = false
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
+
+async function enqueueAlign(path) {
+  const r = await api(path, 'POST', {})
+  if (!r.ok) { toast('⚠️ ' + (r.data && r.data.error ? r.data.error : '加入队列失败'), true, true); return false }
+  toast(r.data.message || '已加入生成队列')
+  return true
+}
+
 async function alignCourse(courseId) {
+  if (alignBusy) { toast('⚠️ 已有生成任务在进行，请等待完成', true, true); return }
   const btn = event && event.target
-  if (btn) { btn.disabled = true; btn.textContent = '生成中…' }
-  const r = await api(`/admin/course/${courseId}/align`, 'POST', {})
-  if (btn) { btn.disabled = false; btn.textContent = '🎨 生成词色标注' }
-  if (!r.ok) { toast('⚠️ ' + (r.data && r.data.error ? r.data.error : '生成失败'), true, true); return }
-  const d = r.data || {}
-  if (d.failed) toast('⚠️ ' + alignErrText(d), true, true)  // 失败原因常驻，点了才消失
-  else toast(d.message || '已生成词色标注')
-  loadCourseList()
+  if (btn) btn.disabled = true
+  const ok = await enqueueAlign(`/admin/course/${courseId}/align`)
+  if (btn) btn.disabled = false
+  if (ok) startAlignPolling()
 }
 async function alignAll() {
-  if (!confirm('将对所有课程逐句生成词色标注（相当于逐课点一遍生成），可能耗时较长，确定继续？')) return
+  if (alignBusy) { toast('⚠️ 已有生成任务在进行，请等待完成', true, true); return }
+  if (!confirm('将对所有课程逐句生成词色标注，任务将排队执行（可能耗时较长），确定继续？')) return
   const btn = event && event.target
-  if (btn) { btn.disabled = true; btn.textContent = '标注中…（请稍候）' }
-  const r = await api('/admin/align-all', 'POST', {})
-  if (btn) { btn.disabled = false; btn.textContent = '🎨 一键标注全部课程' }
-  if (!r.ok) { toast('⚠️ ' + (r.data && r.data.error ? r.data.error : '标注失败'), true, true); return }
-  const d = r.data || {}
-  if (d.failed) toast('⚠️ ' + alignErrText(d), true, true)  // 失败原因常驻，点了才消失
-  else toast(d.message || '已全部标注')
-  loadCourseList()
+  if (btn) btn.disabled = true
+  const ok = await enqueueAlign('/admin/align-all')
+  if (btn) btn.disabled = false
+  if (ok) startAlignPolling()
+}
+
+async function startAlignPolling() {
+  if (alignPolling) return
+  alignPolling = true
+  alignBusy = true
+  // 任务进行中禁用所有生成按钮，避免重复入队
+  document.querySelectorAll('button').forEach(b => {
+    if (b.textContent && b.textContent.includes('生成词色标注') && !b.disabled) b.disabled = true
+  })
+  while (alignBusy) {
+    const r = await api('/admin/align-status', 'GET')
+    if (!r.ok) {
+      alignBusy = false; alignPolling = false
+      toast('⚠️ 获取生成状态失败', true, true)
+      loadCourseList()
+      return
+    }
+    const s = r.data || {}
+    if (s.running) {
+      const t = s.course ? `正在生成《${s.course}》` : '正在生成词色标注'
+      toast(`${t} … ${s.done || 0}/${s.total || 0}`, false, true, 'align-progress')
+      await sleep(1500)
+      continue
+    }
+    // 任务已结束
+    alignBusy = false; alignPolling = false
+    const p = document.getElementById('toast-align-progress')
+    if (p) p.remove()
+    const d = s.last_result || {}
+    if (d.ok === false) {
+      toast('⚠️ 生成失败：' + (d.error || '未知错误'), true, true)   // 真实原因，常驻
+    } else if (d.failed) {
+      toast('⚠️ ' + alignErrText(d), true, true)                      // 部分句失败，列出原因，常驻
+    } else {
+      toast(d.message || '已生成词色标注')
+    }
+    loadCourseList()
+    return
+  }
 }
 
 /* ============ 词色标注人工校对编辑器 ============ */

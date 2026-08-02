@@ -47,9 +47,18 @@ function esc(s) {
 }
 function $(sel) { return document.querySelector(sel) }
 function el(id) { return document.getElementById(id) }
-function toast(msg, isErr, sticky) {
+function toast(msg, isErr, sticky, id) {
   const root = el('toast-root')
-  const t = document.createElement('div')
+  let t
+  if (id && (t = el('toast-' + id))) {
+    // 同一 id 复用：更新内容与样式，不重复堆叠
+    t.className = 'toast' + (isErr ? ' err' : '') + (sticky ? ' sticky' : '')
+    const span = t.querySelector('.toast-msg')
+    if (span) span.textContent = msg
+    return
+  }
+  t = document.createElement('div')
+  if (id) t.id = 'toast-' + id
   t.className = 'toast' + (isErr ? ' err' : '') + (sticky ? ' sticky' : '')
   const span = document.createElement('span')
   span.className = 'toast-msg'

@@ -11,6 +11,8 @@ import json
 import datetime
 import re
 import random
+import threading
+import queue
 
 from flask import Flask, request, jsonify, send_from_directory, render_template, session
 from flask_cors import CORS
@@ -50,10 +52,19 @@ DEFAULT_SETTINGS = {
 }
 
 # ================= 系统版本与升级内容（登录页展示 / 数据兼容性参考） =================
-VERSION = 'v0.8.5'
+VERSION = 'v0.8.6'
 # 每个版本是否影响老数据：全部为非破坏性（仅新增列 / 受控数据重映射），无清库操作。
 # 详见 README「数据兼容性」一节；迁移前 init_db.py 会自动备份数据库。
 CHANGELOG = [
+    {'version': 'v0.8.6', 'date': '2026-08-02', 'title': '词色标注：后台任务队列串行 + 真实失败原因透传',
+     'items': [
+         '修复：连续点击多个课程「生成词色标注」会多线程并行写同一 SQLite 文件，触发 database is locked → 500 → 前端只显示裸「生成失败」且无原因',
+         '改为后台单 worker 串行队列：接口只入队立即返回，worker 依次处理；彻底消除并发写库冲突，也不再并行轰炸 AI 接口导致限流',
+         '前端轮询 GET /admin/align-status：实时显示「正在生成《课程》… 进度 done/total」，完成后展示结果；失败原因常驻、点了才消失',
+         'deepseek_client._chat 新增 raise_on_error：超时/429 限流/401/断网等真实异常现在会透传并记录到 errors（不再是笼统的「AI 未返回有效标注」）',
+         '任务进行中禁用「生成词色标注」按钮，避免重复入队',
+         '无数据库结构变更',
+     ]},
     {'version': 'v0.8.5', 'date': '2026-08-02', 'title': '词色标注生成失败原因可见 + 提示常驻',
      'items': [
          '修复：单句 AI 生成异常（超时/网络/JSON 解析失败）会令整次请求 500，前端只弹「生成失败」且无原因、2.6 秒即消失',
@@ -387,7 +398,7 @@ def generate_alignment(english, chinese, user=None):
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps({"english": english, "chinese": chinese}, ensure_ascii=False)},
     ]
-    content = ds._chat(key, messages, base_url=proxy['base_url'], model=proxy['model'])
+    content = ds._chat(key, messages, base_url=proxy['base_url'], model=proxy['model'], raise_on_error=True)
     if not content:
         return None
     obj, err = extract_json(content)
@@ -2209,67 +2220,164 @@ def admin_extract_words(course_id):
 
 
 # ---------------- Step1 词色对齐：管理员手动生成 / 全量回填 ----------------
-@app.route('/api/v1/admin/course/<int:course_id>/align', methods=['POST'])
-@admin_only
-def admin_align_course(course_id):
-    """为某课程所有句子一次性生成词色对齐（覆盖已有 alignment）。
+# ---------------- 词色标注：后台任务队列（串行，避免并发写库冲突） ----------------
+# 连续点击多个课程的「生成词色标注」时，若并行写同一个 SQLite 文件会触发
+# "database is locked" 导致 500、前端只拿到裸「生成失败」。改用单 worker 串行处理：
+# 接口只把任务入队并立即返回，worker 线程依次执行，前端轮询 /admin/align-status 看进度与失败原因。
+_align_queue = queue.Queue()
+_align_worker = None
+_align_worker_lock = threading.Lock()
+align_status = {
+    'running': False,        # 是否有任务在跑
+    'course': None,          # 当前任务课程名（'全部课程' 表示全量）
+    'done': 0,               # 已完成句数
+    'total': 0,              # 总句数
+    'enqueued': 0,           # 队列中等待的任务数
+    'last_result': None,     # 最近一次完成的任务结果 {ok, message, done, failed, errors} 或 {ok:False, error}
+}
 
-    逐句容错：单句生成异常或 AI 未返回有效结果不会中断整次请求，
-    失败句会记入 errors 并返回给前端，方便管理员查看具体失败原因。
-    """
-    u = current_user()
+
+def _align_worker_thread():
+    with app.app_context():
+        while True:
+            job = _align_queue.get()
+            try:
+                _process_align_job(job)
+            except Exception as e:
+                align_status['running'] = False
+                align_status['last_result'] = {
+                    'ok': False,
+                    'error': f'{type(e).__name__}: {e}'
+                }
+            finally:
+                _align_queue.task_done()
+
+
+def ensure_align_worker():
+    """懒启动单例 worker 线程（守护线程，随进程退出）。"""
+    global _align_worker
+    with _align_worker_lock:
+        if _align_worker is None or not _align_worker.is_alive():
+            _align_worker = threading.Thread(target=_align_worker_thread, daemon=True)
+            _align_worker.start()
+
+
+def _process_align_job(job):
+    """在 worker 线程中串行执行单个标注任务（课程 or 全量）。真实异常会被记录进 errors。"""
+    u = User.query.get(job['user_id'])
+    if not u:
+        align_status['running'] = False
+        align_status['last_result'] = {'ok': False, 'error': '用户不存在'}
+        return
     if not resolve_api_key(u):
-        return jsonify(error='未配置 AI 模型，无法生成词色标注（请在管理员「AI 模型设置」中填写 API Key）'), 400
-    c = Course.query.get_or_404(course_id)
-    sents = Sentence.query.filter_by(course_id=course_id).order_by(Sentence.sentence_order).all()
+        align_status['running'] = False
+        align_status['last_result'] = {
+            'ok': False,
+            'error': '未配置 AI 模型，无法生成词色标注（请在管理员「AI 模型设置」中填写 API Key）'
+        }
+        return
+
+    is_all = job['type'] == 'all'
+    if is_all:
+        courses = Course.query.all()
+        align_status['course'] = '全部课程'
+    else:
+        c = Course.query.get(job['course_id'])
+        if not c:
+            align_status['running'] = False
+            align_status['last_result'] = {'ok': False, 'error': '课程不存在'}
+            return
+        courses = [c]
+        align_status['course'] = c.title
+
+    # 先统计总句数用于进度展示
+    total = 0
+    for cc in courses:
+        for s in Sentence.query.filter_by(course_id=cc.id).order_by(Sentence.sentence_order).all():
+            if s.english and s.chinese:
+                total += 1
+    align_status['total'] = total
+    align_status['done'] = 0
+    align_status['running'] = True
+
     done, errors = 0, []
-    for s in sents:
-        if not s.english or not s.chinese:
-            continue
-        try:
-            aligned = generate_alignment(s.english, s.chinese, u)
-        except Exception as e:
-            errors.append({'order': s.sentence_order, 'english': s.english,
-                           'error': f'{type(e).__name__}: {e}'})
-            continue
-        if not aligned:
-            errors.append({'order': s.sentence_order, 'english': s.english,
-                           'error': 'AI 未返回有效标注（结果无法解析为 JSON）'})
-            continue
-        s.alignment = aligned
-        done += 1
-    db.session.commit()
-    msg = f'已为《{c.title}》生成 {done} 句词色标注' + (f'，{len(errors)} 句失败' if errors else '')
-    return jsonify(message=msg, done=done, failed=len(errors), errors=errors)
-
-
-@app.route('/api/v1/admin/align-all', methods=['POST'])
-@admin_only
-def admin_align_all():
-    """全量回填：为所有课程的句子生成词色对齐（处理存量课程）。逐句容错，失败计入 errors。"""
-    u = current_user()
-    if not resolve_api_key(u):
-        return jsonify(error='未配置 AI 模型，无法生成词色标注（请在管理员「AI 模型设置」中填写 API Key）'), 400
-    total, errors = 0, []
-    for c in Course.query.all():
-        for s in Sentence.query.filter_by(course_id=c.id).order_by(Sentence.sentence_order).all():
+    for cc in courses:
+        for s in Sentence.query.filter_by(course_id=cc.id).order_by(Sentence.sentence_order).all():
             if not s.english or not s.chinese:
                 continue
             try:
                 aligned = generate_alignment(s.english, s.chinese, u)
             except Exception as e:
-                errors.append({'course': c.title, 'order': s.sentence_order, 'english': s.english,
-                               'error': f'{type(e).__name__}: {e}'})
+                # 透传 _chat 抛出的真实异常（Timeout/429/401/ConnectionError 等）
+                errors.append({'course': cc.title, 'order': s.sentence_order,
+                               'english': s.english, 'error': f'{type(e).__name__}: {e}'})
                 continue
             if not aligned:
-                errors.append({'course': c.title, 'order': s.sentence_order, 'english': s.english,
-                               'error': 'AI 未返回有效标注（结果无法解析为 JSON）'})
+                errors.append({'course': cc.title, 'order': s.sentence_order,
+                               'english': s.english, 'error': 'AI 未返回有效标注（结果无法解析为 JSON）'})
                 continue
             s.alignment = aligned
-            total += 1
-    db.session.commit()
-    msg = f'已全量生成 {total} 句词色标注' + (f'，{len(errors)} 句失败' if errors else '')
-    return jsonify(message=msg, done=total, failed=len(errors), errors=errors)
+            done += 1
+            align_status['done'] = done
+    try:
+        db.session.commit()
+    except Exception as e:
+        align_status['running'] = False
+        align_status['last_result'] = {
+            'ok': False,
+            'error': f'数据库写入失败（{type(e).__name__}）：{e}'
+        }
+        return
+    msg = (f'已为《{align_status["course"]}》生成 {done} 句词色标注'
+           if not is_all else f'已全量生成 {done} 句词色标注') + (f'，{len(errors)} 句失败' if errors else '')
+    align_status['running'] = False
+    align_status['last_result'] = {
+        'ok': True, 'message': msg, 'done': done, 'failed': len(errors), 'errors': errors
+    }
+
+
+@app.route('/api/v1/admin/course/<int:course_id>/align', methods=['POST'])
+@admin_only
+def admin_align_course(course_id):
+    """为某课程所有句子一次性生成词色对齐（覆盖已有 alignment）。
+
+    接口只负责把任务入队并立即返回，真正的生成由后台单 worker 串行执行，
+    避免连续点击多个课程时并发写 SQLite 触发 "database is locked" 而 500。
+    前端通过 GET /admin/align-status 轮询进度与失败原因。
+    """
+    u = current_user()
+    if not resolve_api_key(u):
+        return jsonify(error='未配置 AI 模型，无法生成词色标注（请在管理员「AI 模型设置」中填写 API Key）'), 400
+    if not Course.query.get(course_id):
+        return jsonify(error='课程不存在'), 404
+    ensure_align_worker()
+    _align_queue.put({'type': 'course', 'course_id': course_id, 'user_id': u.id})
+    pos = _align_queue.qsize()
+    align_status['enqueued'] = pos
+    return jsonify(queued=True, position=pos,
+                   message=f'已加入生成队列（排第 {pos} 位，后台将依次处理）')
+
+
+@app.route('/api/v1/admin/align-all', methods=['POST'])
+@admin_only
+def admin_align_all():
+    """全量回填：为所有课程的句子生成词色对齐（处理存量课程）。任务入队，串行执行。"""
+    u = current_user()
+    if not resolve_api_key(u):
+        return jsonify(error='未配置 AI 模型，无法生成词色标注（请在管理员「AI 模型设置」中填写 API Key）'), 400
+    ensure_align_worker()
+    _align_queue.put({'type': 'all', 'user_id': u.id})
+    pos = _align_queue.qsize()
+    align_status['enqueued'] = pos
+    return jsonify(queued=True, position=pos,
+                   message=f'已加入全量生成队列（排第 {pos} 位，后台将依次处理）')
+
+
+@app.route('/api/v1/admin/align-status', methods=['GET'])
+@admin_only
+def admin_align_status():
+    """返回当前词色标注任务队列状态：是否在跑、进度、最近一次结果（含失败原因）。"""
+    return jsonify(**align_status)
 
 
 @app.route('/api/v1/admin/course/<int:course_id>/sentences', methods=['GET'])

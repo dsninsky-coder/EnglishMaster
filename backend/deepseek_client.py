@@ -16,7 +16,7 @@ DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_MODEL = "deepseek-chat"
 
 
-def _chat(key, messages, base_url=None, model=None, temperature=0.0):
+def _chat(key, messages, base_url=None, model=None, temperature=0.0, raise_on_error=False):
     if not key:
         return None
     base = (base_url or DEFAULT_BASE_URL).rstrip("/")
@@ -36,6 +36,10 @@ def _chat(key, messages, base_url=None, model=None, temperature=0.0):
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
     except Exception:
+        # raise_on_error=True 时把真实异常（超时/429 限流/401/断网等）向上抛，
+        # 让调用方能记录具体失败原因；默认仍吞掉返回 None，兼容旧调用方。
+        if raise_on_error:
+            raise
         return None
 
 
