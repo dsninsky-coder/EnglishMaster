@@ -50,10 +50,16 @@ DEFAULT_SETTINGS = {
 }
 
 # ================= 系统版本与升级内容（登录页展示 / 数据兼容性参考） =================
-VERSION = 'v0.7.6'
+VERSION = 'v0.7.7'
 # 每个版本是否影响老数据：全部为非破坏性（仅新增列 / 受控数据重映射），无清库操作。
 # 详见 README「数据兼容性」一节；迁移前 init_db.py 会自动备份数据库。
 CHANGELOG = [
+    {'version': 'v0.7.7', 'date': '2026-08-02', 'title': 'Step1 词色对齐标注',
+     'items': [
+         'Step1 沉浸输入新增词色对齐：英文词与对应中文片段同色标注，虚词（冠词/代词/介词/连词/助词等）黑色不标注，实词（名/动/形/副）上色',
+         '对齐在课程导入时一次性由 AI 生成并存入 Sentence.alignment（JSON），Step1 打开只读缓存、零实时开销；无 AI Key 时自动降级为普通显示',
+         '管理员课程管理「单词库」新增「🎨 生成词色标注」按钮；另提供全量回填端点处理存量课程',
+     ]},
     {'version': 'v0.7.6', 'date': '2026-07-31', 'title': '修复课程列表总进度步数显示',
      'items': [
          '课程列表「当前进度 Step X/5」硬编码为 5，改为按总步数 7 显示（Step1~7）',
@@ -282,6 +288,69 @@ def extract_course_words(course):
             words.append(tl)
     words.sort()
     return words
+
+
+# ---------------- Step1 词色对齐（一次性 AI 生成，存库） ----------------
+# 调色板：按句子内实词出现顺序循环取色，英文词与对应中文片段同色；虚词黑色。
+ALIGN_PALETTE = ['#e74c3c', '#2980b9', '#27ae60', '#e67e22',
+                 '#8e44ad', '#16a085', '#d35400', '#2c3e50']
+# 这些词性视为实词（上色）；其余（DET/PRON/ADP/CONJ/AUX/PART/NUM/INTJ/PUNCT/OTHER）视为虚词（黑色）。
+ALIGN_CONTENT_POS = {'NOUN', 'PROPN', 'VERB', 'ADJ', 'ADV'}
+
+
+def generate_alignment(english, chinese, user=None):
+    """一次性生成 Step1 词色对齐（调用已配置 AI）。
+
+    返回 {'units': [{en, pos, content, color, zh}, ...]}；无 AI Key 或生成失败时返回 None。
+    颜色在后端按"实词出现顺序"循环调色板分配，保证英文词与中文片段同色。
+    """
+    key = resolve_api_key(user) if user else None
+    if not key:
+        return None
+    proxy = get_ai_proxy()
+    system = (
+        "你是英语标注助手。给定一句英文和它的中文翻译，请把英文按原顺序拆成词序列（保留原文大小写，"
+        "标点可附着在词后或单独成词），对每个英文词给出：\n"
+        "1) pos：取其一 NOUN/PROPN/VERB/ADJ/ADV/DET/PRON/ADP/CONJ/AUX/PART/NUM/INTJ/PUNCT/OTHER；\n"
+        "2) zh：该英文词在中文翻译里对应的中文片段（只写对应那部分，不要整句；"
+        "若是中文里没有对应词的功能词如 the/a/of/is，则 zh 填空字符串）。\n"
+        "不要输出多余解释，只输出 JSON：{\"units\":[{\"en\":\"...\",\"pos\":\"...\",\"zh\":\"...\"}]}。"
+    )
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": json.dumps({"english": english, "chinese": chinese}, ensure_ascii=False)},
+    ]
+    content = ds._chat(key, messages, base_url=proxy['base_url'], model=proxy['model'])
+    if not content:
+        return None
+    obj, err = extract_json(content)
+    if not obj or not isinstance(obj.get('units'), list):
+        return None
+    units, color_idx = [], 0
+    for u in obj['units']:
+        en = (u.get('en') or '').strip()
+        if not en:
+            continue
+        pos = (u.get('pos') or 'OTHER').upper()
+        zh = (u.get('zh') or '').strip()
+        content_flag = pos in ALIGN_CONTENT_POS
+        color = None
+        if content_flag and zh:
+            color = ALIGN_PALETTE[color_idx % len(ALIGN_PALETTE)]
+            color_idx += 1
+        units.append({'en': en, 'pos': pos, 'content': content_flag,
+                      'color': color, 'zh': zh})
+    if not units:
+        return None
+    return {'units': units}
+
+
+def alignment_or_empty(english, chinese, user):
+    """生成对齐；任何异常都降级为空 dict（不影响导入流程）。"""
+    try:
+        return generate_alignment(english, chinese, user) or {}
+    except Exception:
+        return {}
 
 
 # ---------------- 鉴权 ----------------
@@ -528,6 +597,7 @@ def serialize_sentence(s):
         'target_words': s.target_words or [],
         'svo': s.svo or [],
         'chinese_keywords': s.chinese_keywords or [],
+        'alignment': s.alignment or {},
     }
 
 
@@ -1474,7 +1544,8 @@ def upload_course():
                 audio_url=s.get('audio_url') or '',
                 target_words=s.get('target_words') or [],
                 svo=s.get('svo') or [],
-                chinese_keywords=s.get('chinese_keywords') or []))
+                chinese_keywords=s.get('chinese_keywords') or [],
+                alignment=alignment_or_empty(s['english'], s['chinese'], u)))
         created.append(title)
         created_ids.append(course.id)
     db.session.commit()
@@ -1962,6 +2033,45 @@ def admin_extract_words(course_id):
                    words=[{'id': w.id, 'word': w.word, 'is_custom': w.is_custom} for w in out])
 
 
+# ---------------- Step1 词色对齐：管理员手动生成 / 全量回填 ----------------
+@app.route('/api/v1/admin/course/<int:course_id>/align', methods=['POST'])
+@admin_only
+def admin_align_course(course_id):
+    """为某课程所有句子一次性生成词色对齐（覆盖已有 alignment）。"""
+    u = current_user()
+    if not resolve_api_key(u):
+        return jsonify(error='未配置 AI 模型，无法生成词色标注（请在系统设置填写 API Key）'), 400
+    c = Course.query.get_or_404(course_id)
+    sents = Sentence.query.filter_by(course_id=course_id).order_by(Sentence.sentence_order).all()
+    done = 0
+    for s in sents:
+        if not s.english or not s.chinese:
+            continue
+        s.alignment = generate_alignment(s.english, s.chinese, u) or {}
+        done += 1
+    db.session.commit()
+    return jsonify(message=f'已为《{c.title}》生成 {done} 句词色标注', done=done)
+
+
+@app.route('/api/v1/admin/align-all', methods=['POST'])
+@admin_only
+def admin_align_all():
+    """全量回填：为所有课程的句子生成词色对齐（处理存量课程）。"""
+    u = current_user()
+    if not resolve_api_key(u):
+        return jsonify(error='未配置 AI 模型，无法生成词色标注（请在系统设置填写 API Key）'), 400
+    total = 0
+    for c in Course.query.all():
+        for s in Sentence.query.filter_by(course_id=c.id).order_by(Sentence.sentence_order).all():
+            if not s.english or not s.chinese:
+                continue
+            s.alignment = generate_alignment(s.english, s.chinese, u) or {}
+            total += 1
+    db.session.commit()
+    return jsonify(message=f'已全量生成 {total} 句词色标注', total=total)
+
+
+
 @app.route('/api/v1/admin/course/<int:course_id>/words', methods=['GET'])
 @admin_only
 def admin_list_words(course_id):
@@ -2021,6 +2131,7 @@ def delete_course(course_id):
 @admin_only
 def update_course():
     data = request.get_json(silent=True) or {}
+    u = current_user()
     c = Course.query.get_or_404(data.get('course_id'))
     if data.get('title') is not None:
         c.title = data['title']
@@ -2038,7 +2149,8 @@ def update_course():
                 audio_url=s.get('audio_url') or '',
                 target_words=s.get('target_words') or [],
                 svo=s.get('svo') or [],
-                chinese_keywords=s.get('chinese_keywords') or []))
+                chinese_keywords=s.get('chinese_keywords') or [],
+                alignment=alignment_or_empty(s.get('english', ''), s.get('chinese', ''), u)))
     db.session.commit()
     return jsonify(message='课程已更新')
 

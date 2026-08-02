@@ -106,6 +106,12 @@ def migrate():
             db.session.execute(text("ALTER TABLE sentences_new RENAME TO sentences"))
             db.session.commit()
             print('已将 sentences.audio_url 改为可空（数据已保留）。')
+        # sentences: 增加 alignment（词色对齐，一次性 AI 生成）
+        scols2 = [r[1] for r in db.session.execute(text("PRAGMA table_info(sentences)")).fetchall()]
+        if 'alignment' not in scols2:
+            db.session.execute(text("ALTER TABLE sentences ADD COLUMN alignment JSON"))
+            db.session.commit()
+            print('已为 sentences 增加 alignment 列。')
         # users: 增加 last_task_date（用于"签到需先完成任务"）
         ucols = [r[1] for r in db.session.execute(text("PRAGMA table_info(users)")).fetchall()]
         if 'last_task_date' not in ucols:

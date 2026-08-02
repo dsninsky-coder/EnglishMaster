@@ -392,6 +392,7 @@ async function openWordManager(courseId) {
     <p class="muted" style="font-size:13px">一键提取本课实词（自动去除冠词/介词/助词等虚词，仅保留名词/动词/形容词/副词）。提取后可手动删除或新增。学生做题时直接读取本库，不实时提取。</p>
     <div class="row" style="margin-top:8px">
       <button class="btn" onclick="extractWords(${courseId})">⚡ 一键提取单词</button>
+      <button class="btn ghost" onclick="alignCourse(${courseId})">🎨 生成词色标注</button>
     </div>
     <div class="spread" style="margin-top:12px"><b>当前单词（<span id="wmCount">0</span>）</b>
       <span><input id="wmNew" placeholder="新增单词" style="width:auto" />
@@ -419,6 +420,14 @@ async function extractWords(courseId) {
   const r = await api(`/admin/course/${courseId}/extract-words`, 'POST', {})
   if (!r.ok) { toast(r.data.error || '提取失败', true); return }
   toast(`已提取 ${r.data.count} 个单词`); loadWordList(courseId)
+}
+async function alignCourse(courseId) {
+  const btn = event && event.target
+  if (btn) { btn.disabled = true; btn.textContent = '生成中…' }
+  const r = await api(`/admin/course/${courseId}/align`, 'POST', {})
+  if (btn) { btn.disabled = false; btn.textContent = '🎨 生成词色标注' }
+  if (!r.ok) { toast(r.data.error || '生成失败', true); return }
+  toast(r.data.message || '已生成词色标注')
 }
 async function addWord(courseId) {
   const inp = el('wmNew'); const w = (inp.value || '').trim().toLowerCase()

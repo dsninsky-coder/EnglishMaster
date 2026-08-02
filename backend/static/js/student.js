@@ -262,6 +262,37 @@ function drawStep0(body) {
   </div>`
 }
 
+/* Step1 词色对齐渲染：英文词包同色 span，中文对应片段同色 span，虚词黑色 */
+function alignEnglishHtml(units) {
+  return units.map(u => {
+    const en = esc(u.en)
+    if (u.color) return `<span style="color:${u.color};font-weight:600">${en}</span>`
+    return `<span style="color:#555">${en}</span>`
+  }).join(' ')
+}
+function alignChineseHtml(units, chinese) {
+  // 贪心匹配：把每个 content 单元的 zh 片段在原中文句里（按长度从长到短）首次出现处上色，避免重叠
+  const text = chinese || ''
+  const matches = []
+  units.filter(u => u.color && u.zh).sort((a, b) => b.zh.length - a.zh.length).forEach(u => {
+    const zh = u.zh
+    let idx = text.indexOf(zh)
+    while (idx !== -1 && matches.some(m => idx < m.e && idx + zh.length > m.s)) {
+      idx = text.indexOf(zh, idx + 1)
+    }
+    if (idx !== -1) matches.push({ s: idx, e: idx + zh.length, color: u.color })
+  })
+  matches.sort((a, b) => a.s - b.s)
+  let out = '', last = 0
+  for (const m of matches) {
+    if (m.s > last) out += esc(text.slice(last, m.s))
+    out += `<span style="color:${m.color};font-weight:600">${esc(text.slice(m.s, m.e))}</span>`
+    last = m.e
+  }
+  if (last < text.length) out += esc(text.slice(last))
+  return out || esc(text)
+}
+
 /* Step 1：沉浸输入（无评分） */
 function drawStep1(body) {
   const s = learn.sentences[learn.idx]
@@ -269,14 +300,22 @@ function drawStep1(body) {
   const tw = s.target_words || []
   const hasAudio = !!s.audio_url
   const isLast = learn.idx + 1 >= learn.sentences.length
+  const aligned = s.alignment && s.alignment.units && s.alignment.units.length
+  const cnHtml = aligned
+    ? `<div class="cn align-cn" style="margin-top:10px">${alignChineseHtml(s.alignment.units, s.chinese)}</div>
+       <div class="muted" style="font-size:12px;margin-top:6px">🎨 同色英文词与中文片段一一对应；黑色为虚词（不标注）</div>`
+    : `<div class="cn" style="margin-top:10px">${esc(s.chinese)}</div>`
+  const enHtml = aligned
+    ? `<div class="sentence align-en">${alignEnglishHtml(s.alignment.units)}</div>`
+    : `<div class="sentence">${hl(s.english, tw)}</div>`
   body.innerHTML = `<div class="card">
     <div class="spread">
       <span class="muted">第 ${learn.idx + 1}/${learn.sentences.length} 句</span>
       <button class="btn ghost sm" onclick="backToSteps()">← 步骤</button>
     </div>
-    <div class="cn" style="margin-top:10px">${esc(s.chinese)}</div>
+    ${cnHtml}
     <div id="en1" style="margin-top:12px">
-      <div class="sentence">${hl(s.english, tw)}</div>
+      ${enHtml}
       ${hasAudio ? `<button class="btn ghost sm aud-btn" style="margin-top:8px" data-label="🔊 再听这句" onclick="playAudio('${esc(s.audio_url)}', 1, this)">🔊 再听这句</button>` : ''}
     </div>
     ${hasAudio ? `<div class="rate-btns" style="margin-top:12px">${rateButtons(s.audio_url)}</div>` : '<div class="muted" style="margin-top:12px">无音频</div>'}

@@ -74,6 +74,7 @@ class Sentence(db.Model):
     target_words = db.Column(db.JSON, default=list)         # ["word1","word2"]
     svo = db.Column(db.JSON, default=list)                  # ["He","see","cat"]
     chinese_keywords = db.Column(db.JSON, default=list)     # ["疲惫","下班"] 补充字段
+    alignment = db.Column(db.JSON, default=dict)           # 词色对齐（一次性 AI 生成）：{units:[{en,pos,content,color,zh}]}
 
 
 class CourseAssignment(db.Model):
