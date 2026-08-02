@@ -184,8 +184,12 @@ input:focus, textarea:focus { border-color: var(--primary); }
 .modal { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; width: 100%; max-width: 420px; }
 .modal h3 { margin: 0 0 12px; }
 
-.toast { position: fixed; left: 50%; top: 24px; transform: translateX(-50%); z-index: 80; background: var(--surface-2); border: 1px solid var(--line); color: var(--text); padding: 10px 16px; border-radius: 12px; font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+.toast { position: fixed; left: 50%; top: 24px; transform: translateX(-50%); z-index: 80; background: var(--surface-2); border: 1px solid var(--line); color: var(--text); padding: 10px 16px; border-radius: 12px; font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.4); max-width: min(92vw, 720px); white-space: pre-wrap; cursor: pointer; pointer-events: auto; display: flex; align-items: flex-start; gap: 10px; line-height: 1.5; }
+.toast .toast-msg { flex: 1; }
 .toast.err { border-color: var(--warn); }
+.toast.sticky { border-color: var(--warn); background: #2a2118; }
+.toast .toast-x { flex: 0 0 auto; font-weight: 700; color: var(--warn); margin-left: 4px; opacity: .8; }
+.toast .toast-x:hover { opacity: 1; }
 
 .tablewrap { overflow-x: auto; }
 table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }

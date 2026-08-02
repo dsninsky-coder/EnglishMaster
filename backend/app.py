@@ -50,10 +50,18 @@ DEFAULT_SETTINGS = {
 }
 
 # ================= 系统版本与升级内容（登录页展示 / 数据兼容性参考） =================
-VERSION = 'v0.8.4'
+VERSION = 'v0.8.5'
 # 每个版本是否影响老数据：全部为非破坏性（仅新增列 / 受控数据重映射），无清库操作。
 # 详见 README「数据兼容性」一节；迁移前 init_db.py 会自动备份数据库。
 CHANGELOG = [
+    {'version': 'v0.8.5', 'date': '2026-08-02', 'title': '词色标注生成失败原因可见 + 提示常驻',
+     'items': [
+         '修复：单句 AI 生成异常（超时/网络/JSON 解析失败）会令整次请求 500，前端只弹「生成失败」且无原因、2.6 秒即消失',
+         '后端逐句容错：生成异常或 AI 未返回有效结果不再中断整次请求，失败句记入 errors 并返回（含句序/英文/具体错误）',
+         '管理员界面：生成失败时弹出常驻提示（sticky toast），列出每句失败原因，**需点击 ✕ 才消失**；成功仍自动消失',
+         'toast 支持 sticky 模式与点击关闭；错误提示可换行展示多句失败',
+         '无数据库结构变更',
+     ]},
     {'version': 'v0.8.4', 'date': '2026-08-02', 'title': '词色标注：一个英文词对应中文多处（/ 、 分隔）',
      'items': [
          '中文对应支持多段：在「中文对应」里用 / 或 、 分隔多个分散的字/词，例如 near → 在/旁',
@@ -2204,38 +2212,64 @@ def admin_extract_words(course_id):
 @app.route('/api/v1/admin/course/<int:course_id>/align', methods=['POST'])
 @admin_only
 def admin_align_course(course_id):
-    """为某课程所有句子一次性生成词色对齐（覆盖已有 alignment）。"""
+    """为某课程所有句子一次性生成词色对齐（覆盖已有 alignment）。
+
+    逐句容错：单句生成异常或 AI 未返回有效结果不会中断整次请求，
+    失败句会记入 errors 并返回给前端，方便管理员查看具体失败原因。
+    """
     u = current_user()
     if not resolve_api_key(u):
         return jsonify(error='未配置 AI 模型，无法生成词色标注（请在管理员「AI 模型设置」中填写 API Key）'), 400
     c = Course.query.get_or_404(course_id)
     sents = Sentence.query.filter_by(course_id=course_id).order_by(Sentence.sentence_order).all()
-    done = 0
+    done, errors = 0, []
     for s in sents:
         if not s.english or not s.chinese:
             continue
-        s.alignment = generate_alignment(s.english, s.chinese, u) or {}
+        try:
+            aligned = generate_alignment(s.english, s.chinese, u)
+        except Exception as e:
+            errors.append({'order': s.sentence_order, 'english': s.english,
+                           'error': f'{type(e).__name__}: {e}'})
+            continue
+        if not aligned:
+            errors.append({'order': s.sentence_order, 'english': s.english,
+                           'error': 'AI 未返回有效标注（结果无法解析为 JSON）'})
+            continue
+        s.alignment = aligned
         done += 1
     db.session.commit()
-    return jsonify(message=f'已为《{c.title}》生成 {done} 句词色标注', done=done)
+    msg = f'已为《{c.title}》生成 {done} 句词色标注' + (f'，{len(errors)} 句失败' if errors else '')
+    return jsonify(message=msg, done=done, failed=len(errors), errors=errors)
 
 
 @app.route('/api/v1/admin/align-all', methods=['POST'])
 @admin_only
 def admin_align_all():
-    """全量回填：为所有课程的句子生成词色对齐（处理存量课程）。"""
+    """全量回填：为所有课程的句子生成词色对齐（处理存量课程）。逐句容错，失败计入 errors。"""
     u = current_user()
     if not resolve_api_key(u):
         return jsonify(error='未配置 AI 模型，无法生成词色标注（请在管理员「AI 模型设置」中填写 API Key）'), 400
-    total = 0
+    total, errors = 0, []
     for c in Course.query.all():
         for s in Sentence.query.filter_by(course_id=c.id).order_by(Sentence.sentence_order).all():
             if not s.english or not s.chinese:
                 continue
-            s.alignment = generate_alignment(s.english, s.chinese, u) or {}
+            try:
+                aligned = generate_alignment(s.english, s.chinese, u)
+            except Exception as e:
+                errors.append({'course': c.title, 'order': s.sentence_order, 'english': s.english,
+                               'error': f'{type(e).__name__}: {e}'})
+                continue
+            if not aligned:
+                errors.append({'course': c.title, 'order': s.sentence_order, 'english': s.english,
+                               'error': 'AI 未返回有效标注（结果无法解析为 JSON）'})
+                continue
+            s.alignment = aligned
             total += 1
     db.session.commit()
-    return jsonify(message=f'已全量生成 {total} 句词色标注', total=total)
+    msg = f'已全量生成 {total} 句词色标注' + (f'，{len(errors)} 句失败' if errors else '')
+    return jsonify(message=msg, done=total, failed=len(errors), errors=errors)
 
 
 @app.route('/api/v1/admin/course/<int:course_id>/sentences', methods=['GET'])

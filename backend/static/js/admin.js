@@ -438,13 +438,24 @@ async function extractWords(courseId) {
   if (!r.ok) { toast(r.data.error || '提取失败', true); return }
   toast(`已提取 ${r.data.count} 个单词`); loadWordList(courseId)
 }
+// 把后端的 errors 列表拼成可读文本（align-all 的 error 带 course 标题）
+function alignErrText(d) {
+  const lines = (d.errors || []).map(e => {
+    const where = (e.course ? `《${e.course}》` : '') + `第${e.order != null ? e.order : '?'}句`
+    const en = (e.english || '').length > 40 ? (e.english.slice(0, 40) + '…') : (e.english || '')
+    return `· ${where}「${en}」：${e.error}`
+  }).join('\n')
+  return (d.message ? d.message + '\n' : '') + lines
+}
 async function alignCourse(courseId) {
   const btn = event && event.target
   if (btn) { btn.disabled = true; btn.textContent = '生成中…' }
   const r = await api(`/admin/course/${courseId}/align`, 'POST', {})
   if (btn) { btn.disabled = false; btn.textContent = '🎨 生成词色标注' }
-  if (!r.ok) { toast(r.data.error || '生成失败', true); return }
-  toast(r.data.message || '已生成词色标注')
+  if (!r.ok) { toast('⚠️ ' + (r.data && r.data.error ? r.data.error : '生成失败'), true, true); return }
+  const d = r.data || {}
+  if (d.failed) toast('⚠️ ' + alignErrText(d), true, true)  // 失败原因常驻，点了才消失
+  else toast(d.message || '已生成词色标注')
   loadCourseList()
 }
 async function alignAll() {
@@ -453,8 +464,10 @@ async function alignAll() {
   if (btn) { btn.disabled = true; btn.textContent = '标注中…（请稍候）' }
   const r = await api('/admin/align-all', 'POST', {})
   if (btn) { btn.disabled = false; btn.textContent = '🎨 一键标注全部课程' }
-  if (!r.ok) { toast(r.data.error || '标注失败', true); return }
-  toast(r.data.message || '已全部标注')
+  if (!r.ok) { toast('⚠️ ' + (r.data && r.data.error ? r.data.error : '标注失败'), true, true); return }
+  const d = r.data || {}
+  if (d.failed) toast('⚠️ ' + alignErrText(d), true, true)  // 失败原因常驻，点了才消失
+  else toast(d.message || '已全部标注')
   loadCourseList()
 }
 

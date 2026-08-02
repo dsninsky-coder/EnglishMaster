@@ -47,13 +47,24 @@ function esc(s) {
 }
 function $(sel) { return document.querySelector(sel) }
 function el(id) { return document.getElementById(id) }
-function toast(msg, isErr) {
+function toast(msg, isErr, sticky) {
   const root = el('toast-root')
   const t = document.createElement('div')
-  t.className = 'toast' + (isErr ? ' err' : '')
-  t.textContent = msg
+  t.className = 'toast' + (isErr ? ' err' : '') + (sticky ? ' sticky' : '')
+  const span = document.createElement('span')
+  span.className = 'toast-msg'
+  span.textContent = msg
+  t.appendChild(span)
+  if (sticky) {
+    const x = document.createElement('span')
+    x.className = 'toast-x'
+    x.textContent = '✕'
+    t.appendChild(x)
+  }
+  // 点击（含 ✕）即关闭；sticky 不自动消失，必须管理员手动点掉
+  t.addEventListener('click', () => t.remove())
   root.appendChild(t)
-  setTimeout(() => t.remove(), 2600)
+  if (!sticky) setTimeout(() => t.remove(), 2600)
 }
 function modal(html) {
   const root = el('modal-root')
