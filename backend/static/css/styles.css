@@ -513,7 +513,12 @@ table.tbl td.ops .btn { margin: 2px 2px; }
 }
 .unit-row .a-en { flex: 1 1 180px; min-width: 120px; }
 .unit-row .a-zh { flex: 1 1 180px; min-width: 120px; }
-.unit-row input[type=text], .unit-row .a-en, .unit-row .a-zh {
+.unit-row .a-gid {
+  flex: 0 0 72px; min-width: 64px; width: 72px;
+  padding: 8px 8px; font-size: 14px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--text);
+}
+.unit-row input[type=text], .unit-row .a-en, .unit-row .a-zh, .unit-row .a-gid {
   padding: 8px 10px; font-size: 15px; border-radius: 8px;
   border: 1px solid var(--line); background: var(--bg); color: var(--text);
 }

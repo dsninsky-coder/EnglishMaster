@@ -520,12 +520,21 @@ async function startAlignPolling() {
 
 /* ============ 词色标注人工校对编辑器 ============ */
 const ALIGN_PALETTE = ['#e74c3c', '#2980b9', '#27ae60', '#e67e22', '#8e44ad', '#16a085', '#d35400', '#2c3e50']
-// 与后端一致：content 且 zh 非空的片段按出现顺序循环取色
+// 与后端一致：content 且 zh 非空的片段上色；同一 gid(>0) 的多个片段共享同色（短语动词等）
 function alignColorsFor(units) {
-  const out = []; let idx = 0
+  const out = []; const groupColors = {}; let idx = 0
   for (const u of units) {
-    if (u.content && u.zh) { out.push(ALIGN_PALETTE[idx % ALIGN_PALETTE.length]); idx++ }
-    else out.push(null)
+    const zh = (u.zh || '').trim()
+    const hasZh = !!zh
+    const content = (u.content !== undefined && u.content !== null) ? !!u.content : hasZh
+    if (content && hasZh) {
+      let gid = u.gid
+      if (gid === '' || gid == null) gid = 0
+      else gid = Number(gid)
+      const key = gid ? gid : ('solo' + idx)
+      if (!(key in groupColors)) { groupColors[key] = ALIGN_PALETTE[idx % ALIGN_PALETTE.length]; idx++ }
+      out.push(groupColors[key])
+    } else out.push(null)
   }
   return out
 }
@@ -535,6 +544,7 @@ function refreshCardColors(card) {
     en: r.querySelector('.a-en').value,
     zh: r.querySelector('.a-zh').value,
     content: r.querySelector('.a-content').checked,
+    gid: r.querySelector('.a-gid').value,
   }))
   const colors = alignColorsFor(units)
   rows.forEach((r, i) => {
@@ -548,10 +558,12 @@ function unitRowHtml(u, sid) {
   const checked = u && u.content ? 'checked' : ''
   const en = (u && u.en) || ''
   const zh = (u && u.zh) || ''
+  const gid = (u && u.gid) ? u.gid : ''
   return `<div class="unit-row">
     <input class="a-en" value="${esc(en)}" placeholder="英文片段" />
     <input class="a-zh" value="${esc(zh)}" placeholder="中文对应" oninput="alignCardCnPreview(${sid})" />
     <label><input type="checkbox" class="a-content" ${checked} onchange="refreshCardColors(this.closest('.align-card'));alignCardCnPreview(${sid})"> 上色</label>
+    <input class="a-gid" type="number" min="0" value="${esc(gid)}" placeholder="同色组" title="同一数字→同色（短语动词等）" oninput="refreshCardColors(this.closest('.align-card'));alignCardCnPreview(${sid})" />
     <span class="swatch"></span>
     <button class="btn ghost sm" onclick="delAlignUnit(this)">删除</button>
   </div>`
@@ -565,6 +577,7 @@ function alignCardCnPreview(sid) {
     en: r.querySelector('.a-en').value,
     zh: r.querySelector('.a-zh').value,
     content: r.querySelector('.a-content').checked,
+    gid: r.querySelector('.a-gid').value,
   }))
   const colors = alignColorsFor(units)
   const colored = units.map((u, i) => ({ en: u.en, zh: u.zh, color: colors[i] }))
@@ -602,7 +615,10 @@ async function loadAlignEditor(courseId) {
     <h3>🎨 词色标注校对 · #${courseId} ${esc(r.data.title || '')}</h3>
     <button class="btn ghost" onclick="nav('#/admin/courses')">← 返回课程列表</button>
   </div>
-  <p class="hint">逐句编辑英文片段与中文对应；勾选「上色」则该片段带颜色（英文与中文同色），不勾为黑色（虚词）。保存后学生端立即生效，无需重新推送课程。<br><b>一个英文词对应中文里多个分散的字/词</b>时，在「中文对应」里用 <b>/</b> 或 <b>、</b> 分隔，例如 <code>near → 在/旁</code>，则中文句里「在」和「旁」分别上色、「…」保持黑色。下方“学生端预览”会实时显示效果。</p>`
+  <p class="hint">逐句编辑英文片段与中文对应；勾选「上色」则该片段带颜色（英文与中文同色），不勾为黑色（虚词）。保存后学生端立即生效，无需重新推送课程。<br>
+  <b>一个英文词对应中文里多个分散的字/词</b>时，在「中文对应」里用 <b>/</b> 或 <b>、</b> 分隔，例如 <code>near → 在/旁</code>，则中文句里「在」和「旁」分别上色、「…」保持黑色。<br>
+  <b>短语动词/多词短语</b>（如 <code>throws it up</code>）：把构成短语的多个片段（如 throws 与 up）填上<b>相同的「同色组」数字</b>，它们就会显示<b>同一颜色</b>，中间的 it 留空不上色（黑色）。这样 throws…up 作为一个短语整体标注，不再被拆开。<br>
+  下方“学生端预览”会实时显示效果。</p>`
   html += sents.map(s => alignCardHtml(s)).join('')
   box.innerHTML = html
   box.querySelectorAll('.align-card').forEach(refreshCardColors)
@@ -614,6 +630,7 @@ function addAlignUnit(sid) {
   div.innerHTML = `<input class="a-en" placeholder="英文片段" />
     <input class="a-zh" placeholder="中文对应" />
     <label><input type="checkbox" class="a-content" checked onchange="refreshCardColors(this.closest('.align-card'))"> 上色</label>
+    <input class="a-gid" type="number" min="0" placeholder="同色组" title="同一数字→同色（短语动词等）" oninput="refreshCardColors(this.closest('.align-card'))" />
     <span class="swatch"></span>
     <button class="btn ghost sm" onclick="delAlignUnit(this)">删除</button>`
   wrap.appendChild(div)
@@ -634,7 +651,9 @@ async function saveAlignSentence(sid) {
     const zh = row.querySelector('.a-zh').value.trim()
     const content = row.querySelector('.a-content').checked
     if (!en) return
-    units.push({ en, zh, content })
+    let gid = parseInt(row.querySelector('.a-gid').value, 10)
+    if (isNaN(gid) || gid < 0) gid = 0
+    units.push({ en, zh, content, gid })
   })
   if (!units.length) { toast('至少保留一个英文片段', true); return }
   const btn = event && event.target

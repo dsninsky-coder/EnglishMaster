@@ -52,10 +52,19 @@ DEFAULT_SETTINGS = {
 }
 
 # ================= 系统版本与升级内容（登录页展示 / 数据兼容性参考） =================
-VERSION = 'v0.8.6'
+VERSION = 'v0.8.7'
 # 每个版本是否影响老数据：全部为非破坏性（仅新增列 / 受控数据重映射），无清库操作。
 # 详见 README「数据兼容性」一节；迁移前 init_db.py 会自动备份数据库。
 CHANGELOG = [
+    {'version': 'v0.8.7', 'date': '2026-08-02', 'title': '词色标注：英文多词短语同色组（gid）',
+     'items': [
+         '新增「同色组 gid」：一个短语拆成的多个英文片段填相同 gid 即共享同色，支持非相邻短语动词，如 throws … up（中间 it 黑色）',
+         'AI 生成提示词补充 gid 规则：短语动词（throws it up / turn on the light）拆段并标同一 gid，动词与小品词同色、宾语黑色',
+         '管理员校对编辑器：每个片段新增「同色组」数字输入框；相同数字→同色，下方学生端预览实时显示同色效果',
+         '后端 _assign_alignment_colors 与前端 alignColorsFor 均 gid 感知；PUT /admin/sentence/<id>/alignment 支持保存 gid',
+         '示例：He throws it up in the air → throws(抛,gid1) it(黑) up(起,gid1) in the air(空中)，throws 与 up 同红、it 黑',
+         '无数据库结构变更（units 新增可选 gid 字段，旧标注无 gid 仍按原逻辑各自取色，向后兼容）',
+     ]},
     {'version': 'v0.8.6', 'date': '2026-08-02', 'title': '词色标注：后台任务队列串行 + 真实失败原因透传',
      'items': [
          '修复：连续点击多个课程「生成词色标注」会多线程并行写同一 SQLite 文件，触发 database is locked → 500 → 前端只显示裸「生成失败」且无原因',
@@ -368,11 +377,48 @@ ALIGN_PALETTE = ['#e74c3c', '#2980b9', '#27ae60', '#e67e22',
 ALIGN_CONTENT_POS = {'NOUN', 'PROPN', 'VERB', 'ADJ', 'ADV'}  # 保留供 pos 参考，上色不再依赖它
 
 
+def _assign_alignment_colors(raw_units):
+    """给对齐片段分配颜色。
+
+    raw_units: 含 en/zh/content(可选)/gid(可选) 的片段列表。
+    - 有中文对应(zh 非空)的片段上色；纯功能词(zh 空)黑色。
+    - 同一 gid(>0) 的多个片段共享同一颜色，用于把"一个短语拆成的多段"归为一组
+      （如短语动词 throws ... up：throws 与 up 同色，中间的 it 为黑色独立单元），
+      即使这些片段在原句中并不相邻也能正确同色。
+    - gid 为空/0 的片段各自独立取色。
+    返回带 color / gid / content 的最终片段列表。
+    """
+    group_colors = {}
+    out, idx = [], 0
+    for u in raw_units:
+        zh = (u.get('zh') or '').strip()
+        has_zh = bool(zh)
+        content = u.get('content', has_zh)
+        if content is None:
+            content = has_zh
+        content = bool(content and has_zh)
+        gid = u.get('gid')
+        try:
+            gid = int(gid)
+        except (TypeError, ValueError):
+            gid = 0
+        color = None
+        if content:
+            key = gid if gid else ('solo', idx)
+            if key not in group_colors:
+                group_colors[key] = ALIGN_PALETTE[idx % len(ALIGN_PALETTE)]
+                idx += 1
+            color = group_colors[key]
+        out.append({'en': (u.get('en') or '').strip(), 'pos': str(u.get('pos') or 'OTHER').upper(),
+                    'content': content, 'color': color, 'zh': zh, 'gid': gid})
+    return out
+
+
 def generate_alignment(english, chinese, user=None):
     """一次性生成 Step1 词色对齐（调用已配置 AI）。
 
-    返回 {'units': [{en, pos, content, color, zh}, ...]}；无 AI Key 或生成失败时返回 None。
-    颜色在后端按"实词出现顺序"循环调色板分配，保证英文词与中文片段同色。
+    返回 {'units': [{en, pos, content, color, zh, gid}, ...]}；无 AI Key 或生成失败时返回 None。
+    颜色在后端按"实词出现顺序 / 同色组 gid"循环调色板分配，保证英文词与中文片段同色。
     """
     key = resolve_api_key(user) if user else None
     if not key:
@@ -391,8 +437,12 @@ def generate_alignment(english, chinese, user=None):
         "若一个英文片段在中文里对应多个分散的字/词（如 near 对应「在…旁」），用 / 或 、 把这几处连起来，"
         "例如 near 的 zh 写 \"在/旁\"，渲染时这几处会分别上同一颜色；\n"
         "3) pos：该片段中心词的词性，取其一 NOUN/PROPN/VERB/ADJ/ADV/DET/PRON/ADP/CONJ/AUX/PART/NUM/INTJ/PUNCT/OTHER。\n"
+        "4) gid：短语组编号（整数，可选）。当一个短语被拆成多个片段、需要它们显示**同色**时使用，"
+        "尤其短语动词（动词+小品词），例如 \"throws it up\" 应拆为 throws(gid=1, zh=抛)、it(zh空,黑色)、"
+        "up(gid=1, zh=起)——throws 与 up 同色（都属于 throw up 这个短语），中间的 it 是独立黑色单元；"
+        "又如 \"turn on the light\"：turn(gid=1)、on(gid=1)、the light(无gid)。不构成短语的片段不要填 gid。\n"
         "要求：英文片段按原顺序拼接后必须等于原英文句（含空格与标点）；不要输出多余解释，"
-        "只输出 JSON：{\"units\":[{\"en\":\"...\",\"zh\":\"...\",\"pos\":\"...\"}]}。"
+        "只输出 JSON：{\"units\":[{\"en\":\"...\",\"zh\":\"...\",\"pos\":\"...\",\"gid\":0}]}（gid 可省略，默认为 0）。"
     )
     messages = [
         {"role": "system", "content": system},
@@ -404,25 +454,16 @@ def generate_alignment(english, chinese, user=None):
     obj, err = extract_json(content)
     if not obj or not isinstance(obj.get('units'), list):
         return None
-    units, color_idx = [], 0
+    raw = []
     for u in obj['units']:
         en = (u.get('en') or '').strip()
         if not en:
             continue
-        pos = (u.get('pos') or 'OTHER').upper()
-        zh = (u.get('zh') or '').strip()
-        # 上色规则：片段在中文里有对应翻译（zh 非空）即视为有意群并上色；
-        # 纯功能词（无中文对应）保持黑色。这样短语级切分下，英文片段与中文同色一一对应。
-        content_flag = bool(zh)
-        color = None
-        if content_flag:
-            color = ALIGN_PALETTE[color_idx % len(ALIGN_PALETTE)]
-            color_idx += 1
-        units.append({'en': en, 'pos': pos, 'content': content_flag,
-                      'color': color, 'zh': zh})
-    if not units:
+        raw.append({'en': en, 'pos': (u.get('pos') or 'OTHER').upper(),
+                    'zh': (u.get('zh') or '').strip(), 'gid': u.get('gid', 0)})
+    if not raw:
         return None
-    return {'units': units}
+    return {'units': _assign_alignment_colors(raw)}
 
 
 def alignment_or_empty(english, chinese, user):
@@ -2392,31 +2433,25 @@ def admin_course_sentences(course_id):
 @app.route('/api/v1/admin/sentence/<int:sentence_id>/alignment', methods=['PUT'])
 @admin_only
 def admin_update_sentence_alignment(sentence_id):
-    """人工校对：覆盖单句的词色对齐 units（英文片段/中文对应/是否上色）。"""
+    """人工校对：覆盖单句的词色对齐 units（英文片段/中文对应/是否上色/同色组 gid）。"""
     s = Sentence.query.get_or_404(sentence_id)
     data = request.get_json(silent=True) or {}
     units = data.get('units')
     if not isinstance(units, list):
         return jsonify(error='units 必须是数组'), 400
-    norm = []
-    color_idx = 0
+    raw = []
     for it in units:
         if not isinstance(it, dict):
             continue
         en = str(it.get('en') or '').strip()
         if not en:
             continue
-        zh = str(it.get('zh') or '').strip()
-        content = bool(it.get('content', bool(zh)))
-        color = None
-        if content and zh:
-            color = ALIGN_PALETTE[color_idx % len(ALIGN_PALETTE)]
-            color_idx += 1
-        norm.append({'en': en, 'pos': str(it.get('pos') or '').upper(),
-                     'content': content, 'color': color, 'zh': zh})
-    if not norm:
+        raw.append({'en': en, 'pos': str(it.get('pos') or '').upper(),
+                    'zh': str(it.get('zh') or '').strip(),
+                    'content': it.get('content'), 'gid': it.get('gid', 0)})
+    if not raw:
         return jsonify(error='对齐不能为空（至少保留一个英文片段）'), 400
-    s.alignment = {'units': norm}
+    s.alignment = {'units': _assign_alignment_colors(raw)}
     db.session.commit()
     return jsonify(message='已保存', alignment=s.alignment)
 
