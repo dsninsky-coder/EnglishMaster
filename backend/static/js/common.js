@@ -7,7 +7,11 @@ function setToken(t) { t ? localStorage.setItem('em_token', t) : localStorage.re
 function getUser() { const r = localStorage.getItem('em_user'); return r ? JSON.parse(r) : null }
 function setUser(u) { u ? localStorage.setItem('em_user', JSON.stringify(u)) : localStorage.removeItem('em_user') }
 function setBalance(b) { const u = getUser(); if (u) { u.coin_balance = b; setUser(u) } }
-function doLogout() { setToken(null); setUser(null); location.hash = '#/login' }
+function doLogout() {
+  modalConfirm('确定要退出登录吗？', '退出', '取消').then(ok => {
+    if (ok) { clearLeaveGuard(); setToken(null); setUser(null); location.hash = '#/login' }
+  })
+}
 
 /* ---------- API 客户端 ---------- */
 async function api(path, method = 'GET', body) {
@@ -27,8 +31,10 @@ async function api(path, method = 'GET', body) {
     return { ok: false, status: 0, data: { error: '网络错误：' + e.message } }
   }
   if (res.status === 401 && !['/auth/login', '/auth/register'].includes(path)) {
-    toast('登录已过期，请重新登录', true)
-    setToken(null); setUser(null); location.hash = '#/login'
+    if (location.hash !== '#/login') {   // 已在登录页则不再重复跳转，避免死循环
+      toast('登录已过期，请重新登录', true)
+      setToken(null); setUser(null); location.hash = '#/login'
+    }
   }
   return { ok: res.ok, status: res.status, data }
 }
@@ -56,7 +62,42 @@ function modal(html) {
 }
 function closeModal() { el('modal-root').innerHTML = '' }
 
-function nav(hash) { location.hash = hash }
+/* ---------- 离开确认守卫（做题/任务界面离开时二次确认）---------- */
+let _leaveGuard = null
+function setLeaveGuard(fn) { _leaveGuard = fn }
+function clearLeaveGuard() { _leaveGuard = null }
+
+/* Promise 化的二次确认弹窗；返回 true=确认 false=取消 */
+function modalConfirm(message, okText, cancelText) {
+  return new Promise(resolve => {
+    const ok = okText || '确定'
+    const cancel = cancelText || '取消'
+    modal(`<p style="margin:0 0 16px;line-height:1.5">${esc(message)}</p>
+      <div class="row" style="justify-content:flex-end;gap:10px;margin:0">
+        <button class="btn ghost" onclick="__mcResolve(false)">${esc(cancel)}</button>
+        <button class="btn" onclick="__mcResolve(true)">${esc(ok)}</button>
+      </div>`)
+    window.__mcResolve = (v) => { closeModal(); resolve(v) }
+  })
+}
+
+async function nav(hash) {
+  if (_leaveGuard && typeof _leaveGuard === 'function') {
+    const msg = _leaveGuard()
+    if (msg) {
+      const cur = (location.hash.slice(1) || '/').split('/').filter(Boolean)
+      const tgt = (hash.slice(1) || '/').split('/').filter(Boolean)
+      // 同一门课程内部跳转（如步骤间、返回步骤概览）不算“离开”
+      const sameLearn = cur[0] === 'learn' && tgt[0] === 'learn' && cur[1] === tgt[1]
+      if (!sameLearn) {
+        const ok = await modalConfirm(msg, '确定离开', '再想想')
+        if (!ok) return
+        clearLeaveGuard()
+      }
+    }
+  }
+  location.hash = hash
+}
 
 /* ---------- 框架 ---------- */
 function studentFrame(inner, active) {
@@ -72,11 +113,11 @@ function studentFrame(inner, active) {
     </div>
     <div class="content">${inner}</div>
     <nav class="navbar">
-      <a href="#/" class="${active === 'home' ? 'active' : ''}"><span class="ico">🏠</span>首页</a>
-      <a href="#/coins" class="${active === 'coins' ? 'active' : ''}"><span class="ico">🪙</span>金币</a>
-      <a href="#/shop" class="${active === 'shop' ? 'active' : ''}"><span class="ico">🛒</span>商店</a>
-      <a href="#/wishes" class="${active === 'wishes' ? 'active' : ''}"><span class="ico">🌟</span>许愿</a>
-      <a href="#/report" class="${active === 'report' ? 'active' : ''}"><span class="ico">📊</span>报表</a>
+      <a href="javascript:void(0)" onclick="nav('#/')" class="${active === 'home' ? 'active' : ''}"><span class="ico">🏠</span>首页</a>
+      <a href="javascript:void(0)" onclick="nav('#/coins')" class="${active === 'coins' ? 'active' : ''}"><span class="ico">🪙</span>金币</a>
+      <a href="javascript:void(0)" onclick="nav('#/shop')" class="${active === 'shop' ? 'active' : ''}"><span class="ico">🛒</span>商店</a>
+      <a href="javascript:void(0)" onclick="nav('#/wishes')" class="${active === 'wishes' ? 'active' : ''}"><span class="ico">🌟</span>许愿</a>
+      <a href="javascript:void(0)" onclick="nav('#/report')" class="${active === 'report' ? 'active' : ''}"><span class="ico">📊</span>报表</a>
     </nav>
   </div>`
 }
@@ -254,6 +295,14 @@ function route() {
   if (parts[0] === 'report') return renderReport()
   return renderHome()
 }
+
+// 移动端：输入框聚焦时自动滚入可视区域，避免被输入法遮挡
+document.addEventListener('focusin', e => {
+  const t = e.target
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) {
+    setTimeout(() => { try { t.scrollIntoView({ block: 'center', behavior: 'smooth' }) } catch (e2) {} }, 300)
+  }
+})
 
 window.addEventListener('hashchange', route)
 document.addEventListener('DOMContentLoaded', route)

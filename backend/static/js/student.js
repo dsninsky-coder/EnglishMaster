@@ -35,6 +35,29 @@ async function renderHome() {
     <h3 style="margin:6px 0 12px">选择学习模块</h3>
     <div class="entry-grid">${cards}</div>
   `, 'home')
+  // 登录进首页后，弹出未读消息通知（有消息才弹；无消息不弹）
+  api('/notifications').then(r => {
+    if (r.ok && r.data.notifications && r.data.notifications.length) showNotifications(r.data.notifications)
+  })
+}
+
+/* 学生端消息通知弹窗 */
+function showNotifications(list) {
+  const rows = list.map(n => `<div style="display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line)">
+    <div style="font-size:22px;line-height:1">${n.icon}</div>
+    <div style="flex:1">
+      <div style="font-weight:600">${esc(n.title)}</div>
+      ${n.text ? `<div class="muted" style="margin-top:2px;font-size:13px">${esc(n.text)}</div>` : ''}
+    </div></div>`).join('')
+  modal(`<div>
+    <h3 style="margin:0 0 8px">📬 你有 ${list.length} 条新消息</h3>
+    <div style="max-height:50vh;overflow:auto">${rows}</div>
+    <button class="btn block" style="margin-top:14px" onclick="closeNotifications()">知道了</button>
+  </div>`)
+}
+function closeNotifications() {
+  closeModal()
+  api('/notifications/read', 'POST', {})
 }
 
 /* ---------- 听说大师：课程列表（原首页主体） ---------- */
@@ -295,6 +318,7 @@ function alignChineseHtml(units, chinese) {
 
 /* Step 1：沉浸输入（无评分） */
 function drawStep1(body) {
+  setLeaveGuard(() => '当前学习尚未完成，离开后将不保留进度，确定要离开吗？')
   const s = learn.sentences[learn.idx]
   if (!s) { finishStepView(body); return }
   const tw = s.target_words || []
@@ -345,6 +369,7 @@ function nextStep1() {
 /* Step 2~5：答题步骤（做错反复重练，直到全部做对才解锁） */
 function drawStepN(body) {
   const step = learn.step
+  setLeaveGuard(() => '当前练习尚未提交，离开后将不保留进度，确定要离开吗？')
   if (step === 7) return drawStep7(body)
   // 进入本步时初始化练习队列
   if (learn.queueStep !== step || !learn.queue) {
@@ -430,6 +455,7 @@ function drawStepN(body) {
 
 /* Step4 跟读：屏幕上显示英文原文，学生用语音（或键盘）输入英文原文，本地逐字对比 */
 function drawFollow(body, s) {
+  setLeaveGuard(() => '当前跟读尚未完成，离开后将不保留进度，确定要离开吗？')
   const tw = s.target_words || []
   const hasAudio = !!s.audio_url
   const isLast = learn.idx + 1 >= learn.queue.length
@@ -523,8 +549,8 @@ function changeEnHint() {
   hs.changes++
   const hidden = []
   words.forEach((w, i) => { if (!hs.revealed.has(i)) hidden.push(i) })
+  // 每次只揭示随机 X 个未揭示的单词；最多 Y 次后停止，不一定揭示完整句子
   shuffle(hidden).slice(0, cfg.words).forEach(i => hs.revealed.add(i))
-  if (hs.changes >= cfg.changes) { words.forEach((w, i) => hs.revealed.add(i)) }  // 最后一次揭示全句答案
   drawStepN(el('step-body'))
 }
 
@@ -586,6 +612,7 @@ async function appealSentence(sentenceId, step, std) {
 /* ============ Step7 单词巩固（v0.6：整表乱序 → 每批10个顺序取 → 音汉/英汉交替） ============ */
 const WORD_PER_ROUND = 10
 async function drawStep7(body) {
+  setLeaveGuard(() => '单词巩固尚未完成，离开后将不保留进度，确定要离开吗？')
   if (!learn.words || !learn.words.length) {
     const r = await api(`/courses/${learn.courseId}/words`)
     if (!r.ok) {
@@ -626,7 +653,10 @@ async function drawStep7(body) {
       <div class="spread"><span class="muted">第 ${start + i + 1}/${total} 词 · ${it.mode === 'en2zh' ? '英译中' : '音译中'}</span></div>
       ${head}
       <input id="wa_${i}" class="word-input" placeholder="写出中文意思" />
-      <button class="btn ghost sm" style="margin-top:8px" onclick="judgeWord(${i})">判断</button>
+      <div class="row" style="margin-top:8px;gap:8px">
+        <button class="btn ghost sm" style="flex:1" onclick="judgeWord(${i})" ${it.answered ? 'disabled' : ''}>判断</button>
+        <button class="btn ghost sm" id="wunk_${i}" style="flex:1" onclick="wordUnknown(${i})" ${it.answered ? 'disabled' : ''}>不会</button>
+      </div>
       <div id="wr_${i}"></div>
     </div>`
   }).join('')
@@ -677,6 +707,25 @@ async function judgeWord(i) {
   if (learn.wordItems.every(x => x.answered)) {
     const fb = el('wnext'); if (fb) fb.disabled = false
   }
+}
+
+/* Step7 单词巩固：点「不会」直接显示答案并加入生词表 */
+async function wordUnknown(i) {
+  const it = learn.wordItems[i]
+  if (!it || it.answered) return
+  const btn = el('wunk_' + i)
+  if (btn) { btn.disabled = true; btn.textContent = '查询中…' }
+  const r = await api('/step/word-unknown', 'POST', { word: it.word, mode: it.mode })
+  it.answered = true; it.correct = false
+  learn.wordTotal = (learn.wordTotal || 0) + 1
+  const wr = el('wr_' + i)
+  const meaning = (r.ok && r.data.meaning) ? r.data.meaning : ''
+  const added = (r.ok && r.data.added) ? '<div class="muted" style="margin-top:4px">📕 已加入生词表</div>' : ''
+  const shown = meaning ? `<b>正确答案：</b>${esc(meaning)}` : '（未配置 AI，暂无法显示释义，仍已加入生词表）'
+  wr.innerHTML = `<div class="feedback retry" style="margin-top:6px">📖 没关系，先看答案<br/>${shown}</div>${added}`
+  el('wc_' + i).classList.add('wrong')
+  if (btn) btn.textContent = '不会'
+  if (learn.wordItems.every(x => x.answered)) { const fb = el('wnext'); if (fb) fb.disabled = false }
 }
 
 function finishStep7() {
@@ -844,6 +893,7 @@ function finishStepView(body) {
   </div>`
 }
 async function finishStep(step, accuracy, perfect) {
+  clearLeaveGuard()   // 完成即离开练习，避免回首页时再次弹确认
   const r = await api('/step/finish', 'POST', { course_id: learn.courseId, step, accuracy, perfect: !!perfect })
   if (!r.ok) {
     toast(r.data.error || '提交失败', true)

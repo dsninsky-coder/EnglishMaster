@@ -33,6 +33,7 @@ class User(db.Model):
     total_perfect_steps = db.Column(db.Integer, default=0)
     allow_skip = db.Column(db.Boolean, default=False)    # 管理员为该生开启：一轮后可强制解锁下一步（即使仍有未通过句）
     last_active = db.Column(db.DateTime, default=utcnow)
+    last_notified_at = db.Column(db.DateTime, nullable=True)  # 学生端「消息通知」已读时间点（用于只弹未读消息）
     created_at = db.Column(db.DateTime, default=utcnow)
 
     def set_password(self, pw):

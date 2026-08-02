@@ -50,10 +50,20 @@ DEFAULT_SETTINGS = {
 }
 
 # ================= 系统版本与升级内容（登录页展示 / 数据兼容性参考） =================
-VERSION = 'v0.7.7'
+VERSION = 'v0.8.0'
 # 每个版本是否影响老数据：全部为非破坏性（仅新增列 / 受控数据重映射），无清库操作。
 # 详见 README「数据兼容性」一节；迁移前 init_db.py 会自动备份数据库。
 CHANGELOG = [
+    {'version': 'v0.8.0', 'date': '2026-08-02', 'title': '稳定性与体验修复（7 项）',
+     'items': [
+         '会话过期：JWT 保持 30 天有效，并避免 401 重复跳转登录页死循环',
+         '离开确认：做题/任务界面点击别的任务、退出等会离开当前页面的操作，弹出二次确认弹窗，确认后再跳转',
+         '移动端输入框：聚焦时自动滚入可视区域，底部预留空间，避免输入法遮挡输入框',
+         '单词巩固（Step7）：新增「不会」按钮，点击直接显示答案并自动加入生词表',
+         '学生消息通知：登录进首页后弹窗提示金币奖励/扣除、商品发货/退款、许愿审批、人工复核等未读消息',
+         'Step5（中译英）提示修复：单词数 X + 最大次数 Y 现正确按「最多 Y 次、每次提示 X 个随机单词」生效，不再在最后一次强制写出整句',
+         '课程列表总进度步数此前已修正为 7（Step1~7）',
+     ]},
     {'version': 'v0.7.7', 'date': '2026-08-02', 'title': 'Step1 词色对齐标注',
      'items': [
          'Step1 沉浸输入新增词色对齐：英文词与对应中文片段同色标注，虚词（冠词/代词/介词/连词/助词等）黑色不标注，实词（名/动/形/副）上色',
@@ -669,6 +679,101 @@ def word_judge():
         return jsonify(correct=correct, reason=reason, added_error=added_error)
     except Exception:
         return jsonify(correct=None, reason='AI 返回解析失败')
+
+
+@app.route('/api/v1/step/word-unknown', methods=['POST'])
+@jwt_required()
+def word_unknown():
+    """Step7 单词巩固：学生点「不会」时，直接返回该词标准中文释义并加入生词表。"""
+    u = current_user()
+    data = request.get_json(silent=True) or {}
+    word = (data.get('word') or '').strip()
+    if not word:
+        return jsonify(error='缺少单词'), 400
+    key = resolve_api_key(u)
+    proxy = get_ai_proxy()
+    meaning = ''
+    if key:
+        messages = [
+            {"role": "system", "content": "你是严谨的词典。给出英文单词的标准中文释义，只输出 JSON：{\"meaning\": \"中文释义\"}，不要任何多余解释。"},
+            {"role": "user", "content": json.dumps({"word": word}, ensure_ascii=False)},
+        ]
+        content = ds._chat(key, messages, base_url=proxy['base_url'], model=proxy['model'])
+        if content:
+            obj, _ = extract_json(content)
+            if obj:
+                meaning = (obj.get('meaning') or '').strip()
+    added = False
+    try:
+        added = WordDataManager().add_error_word(u.username, word)
+    except Exception:
+        added = False
+    return jsonify(meaning=meaning, added=added)
+
+
+# ---------------- 学生端消息通知（登录进首页后弹窗）----------------
+def _notif_after(t, since):
+    """t 为事件时间；since 为已读时间点。since 为空表示首次（全部展示）。"""
+    if t is None:
+        return False
+    return since is None or t > since
+
+
+@app.route('/api/v1/notifications', methods=['GET'])
+@jwt_required()
+def list_notifications():
+    u = current_user()
+    if u.role != 'student':
+        return jsonify(notifications=[])
+    since = u.last_notified_at
+    items = []
+    # 1) 金币奖励 / 扣除（管理员操作）
+    for t in CoinTransaction.query.filter_by(user_id=u.id) \
+            .filter(CoinTransaction.category.in_(['reward', 'penalty'])).all():
+        if not _notif_after(t.created_at, since):
+            continue
+        sign = '+' if (t.amount or 0) >= 0 else '-'
+        items.append({'type': 'coin', 'icon': '🪙',
+                      'title': f'金币{sign}{abs(t.amount or 0)}',
+                      'text': t.reason or '', 'time': t.created_at.isoformat() if t.created_at else ''})
+    # 2) 商品发货 / 交易完成 / 退款
+    for o in PurchaseOrder.query.filter_by(student_id=u.id) \
+            .filter(PurchaseOrder.status.in_(['shipped', 'completed', 'rejected'])).all():
+        t = o.shipped_at or o.completed_at or o.created_at
+        if not _notif_after(t, since):
+            continue
+        m = {'shipped': '商品已发货', 'completed': '订单交易完成', 'rejected': '订单已退款'}[o.status]
+        items.append({'type': 'order', 'icon': '📦', 'title': m,
+                      'text': o.admin_note or '', 'time': (t.isoformat() if t else '')})
+    # 3) 许愿审批 / 实现
+    for w in Wish.query.filter_by(student_id=u.id) \
+            .filter(Wish.status.in_(['approved', 'rejected', 'completed'])).all():
+        t = w.resolved_at or w.completed_at or w.created_at
+        if not _notif_after(t, since):
+            continue
+        m = {'approved': '许愿已通过', 'rejected': '许愿未通过', 'completed': '许愿已实现'}[w.status]
+        items.append({'type': 'wish', 'icon': '🌟', 'title': m,
+                      'text': w.admin_reply or w.content or '', 'time': (t.isoformat() if t else '')})
+    # 4) 人工复核结果
+    for a in Appeal.query.filter_by(student_id=u.id) \
+            .filter(Appeal.status.in_(['approved', 'rejected'])).all():
+        t = a.resolved_at or a.created_at
+        if not _notif_after(t, since):
+            continue
+        m = {'approved': '人工复核通过', 'rejected': '人工复核被驳回'}[a.status]
+        items.append({'type': 'appeal', 'icon': '⚖️', 'title': m,
+                      'text': a.admin_note or '', 'time': (t.isoformat() if t else '')})
+    items.sort(key=lambda x: x['time'], reverse=True)
+    return jsonify(notifications=items)
+
+
+@app.route('/api/v1/notifications/read', methods=['POST'])
+@jwt_required()
+def mark_notifications_read():
+    u = current_user()
+    u.last_notified_at = models.utcnow()
+    db.session.commit()
+    return jsonify(ok=True)
 
 
 # ---------------- 闯关提交 ----------------

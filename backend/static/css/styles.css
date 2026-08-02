@@ -30,6 +30,7 @@ input, textarea, select {
   background: var(--surface-2); color: var(--text);
   border: 1px solid var(--line); border-radius: 12px;
   padding: 12px 14px; width: 100%; outline: none;
+  scroll-margin-bottom: 96px;   /* 聚焦时预留底部空间，避免被输入法/底栏遮挡 */
 }
 input:focus, textarea:focus { border-color: var(--primary); }
 
@@ -64,7 +65,7 @@ input:focus, textarea:focus { border-color: var(--primary); }
 .wish-pool-card { border-left: 4px solid var(--accent); }
 
 
-.content { flex: 1; padding: 16px; }
+.content { flex: 1; padding: 16px; padding-bottom: 96px; }  /* 底部预留底栏高度，输入法/底栏不遮挡内容 */
 
 .card {
   background: var(--surface); border: 1px solid var(--line);

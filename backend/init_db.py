@@ -221,6 +221,11 @@ def migrate():
             db.session.execute(text("ALTER TABLE users ADD COLUMN allow_skip BOOLEAN DEFAULT 0"))
             db.session.commit()
             print('已为 users 增加 allow_skip 列。')
+        # users: 增加 last_notified_at（消息通知已读时间点）
+        if 'last_notified_at' not in ucols:
+            db.session.execute(text("ALTER TABLE users ADD COLUMN last_notified_at DATETIME"))
+            db.session.commit()
+            print('已为 users 增加 last_notified_at 列。')
         # 单词大师默认配置（存 SystemSetting）
         wm_defaults = {
             'wm_admin_config': {
