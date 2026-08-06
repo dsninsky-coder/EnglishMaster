@@ -5,9 +5,11 @@ __pycache__/
 *.pyd
 .Python
 venv/
+.venv/
+.ven/
 env/
 envs/
-.venv/
+backend/.ven/
 
 # ── Databases (contain accounts / student progress — never publish) ──
 *.db
