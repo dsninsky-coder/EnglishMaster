@@ -7,7 +7,7 @@ function renderAdmin(tab) {
   const param = parts[2]
   let inner = ''
   // 各板块对应的父级 Tab（用于高亮）
-  const MAIN = ['courses', 'words', 'rewards', 'students', 'appeals', 'system']
+  const MAIN = ['courses', 'schemes', 'words', 'rewards', 'students', 'appeals', 'system']
   const parentOf = {
     coins: 'rewards', shop: 'rewards', wishes: 'rewards',
     report: 'system', db: 'system', api: 'system', account: 'system', settings: 'system',
@@ -17,6 +17,10 @@ function renderAdmin(tab) {
   if (tab === 'courses') {
     // 听说管理：课程管理
     inner = adminCoursesInner()
+  }
+  else if (tab === 'schemes') {
+    // 听力大师：课程方案管理
+    inner = adminSchemesInner()
   }
   else if (tab === 'words') {
     // 单词管理：跳转单词大师后台（服务端页面）
@@ -58,6 +62,7 @@ function renderAdmin(tab) {
   refreshAppealBadge()
 
   if (tab === 'courses') loadCourseList()
+  else if (tab === 'schemes') loadSchemeList()
   else if (tab === 'rewards') {
     if (param === 'shop') loadShopTab()
     else if (param === 'wishes') loadWishesTab()
@@ -1145,4 +1150,323 @@ async function loadAdminCoins() {
       <td>${esc(t.operator || '—')}</td>
     </tr>`).join('') : '<tr><td colspan="6" class="muted">暂无流水</td></tr>'}
   </table></div>`
+}
+
+/* ============ 听力大师 · 课程方案管理 ============ */
+function adminSchemesInner() {
+  return `<div class="card">
+    <div class="spread">
+      <h3>🎯 听力大师 · 课程方案</h3>
+      <button class="btn" onclick="openCreateScheme()">+ 新建方案</button>
+    </div>
+    <p class="muted" style="font-size:13px">课程方案独立于素材管理。为每个方案自由配置每篇文章的启用步骤（1/2/3/4），再分配学生并推送。旧版听说大师课程不受影响，共享同一套素材库。</p>
+    <div id="schemeList"><div class="empty">加载中…</div></div>
+  </div>`
+}
+
+async function loadSchemeList() {
+  const r = await api('/admin/schemes')
+  const box = el('schemeList')
+  if (!box) return
+  if (!r.ok) { box.innerHTML = `<div class="empty">${esc(r.data.error || '')}</div>`; return }
+  const list = r.data.schemes || []
+  if (!list.length) {
+    box.innerHTML = `<div class="empty">暂无方案，点击「新建方案」开始配置听力大师学习计划。</div>`
+    return
+  }
+  box.innerHTML = list.map(s => `
+    <div class="card" style="margin-top:10px">
+      <div class="spread">
+        <b>${esc(s.name)}</b>
+        <span style="font-size:12px" class="${s.is_active ? 'tag ok' : 'muted'}">${s.is_active ? '✅ 激活中' : '⏸ 未激活'}</span>
+      </div>
+      ${s.description ? `<div class="muted" style="font-size:13px;margin-top:4px">${esc(s.description)}</div>` : ''}
+      <div class="row muted" style="font-size:12px;gap:16px;margin-top:6px">
+        <span>📚 ${s.item_count} 门课程</span>
+        <span>👥 ${s.student_count} 名学生</span>
+        <span>⚠️ 回退阈值: ${s.max_errors_before_fallback}次</span>
+        <span>⏱ 冷却: ${s.cooldown_minutes}分钟</span>
+      </div>
+      <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap">
+        <button class="btn sm" onclick="openEditScheme(${s.id})">✏️ 编辑</button>
+        <button class="btn sm" onclick="openSchemeItems(${s.id})">📋 配置步骤</button>
+        <button class="btn sm" onclick="openSchemeStudents(${s.id})">👥 分配学生</button>
+        <button class="btn sm ok" onclick="pushScheme(${s.id})" ${s.is_active ? '' : 'disabled'} ${s.student_count === 0 ? 'disabled' : ''}>🚀 推送</button>
+        <button class="btn sm ghost" onclick="viewSchemeProgress(${s.id})">📊 查看进度</button>
+        <button class="btn sm danger" onclick="deleteScheme(${s.id}, '${esc(s.name)}')">🗑 删除</button>
+      </div>
+    </div>
+  `).join('')
+}
+
+async function openCreateScheme() {
+  modal(`<h3>新建课程方案</h3>
+    <div style="display:flex;flex-direction:column;gap:12px;margin-top:12px">
+      <label class="field"><span>方案名称</span><input id="schName" placeholder="例如：基础阶段A" /></label>
+      <label class="field"><span>描述（选填）</span><input id="schDesc" placeholder="简要说明方案特点" /></label>
+      <div class="row" style="gap:16px">
+        <label class="field"><span>错误回退阈值</span><input id="schMaxErr" type="number" value="10" min="1" max="100" style="width:80px" /></label>
+        <label class="field"><span>冷却时长（分钟）</span><input id="schCooldown" type="number" value="5" min="0" max="1440" style="width:80px" /></label>
+      </div>
+    </div>
+    <div class="row" style="margin-top:16px">
+      <button class="btn ghost" onclick="closeModal()">取消</button>
+      <button class="btn" onclick="createScheme()">创建</button>
+    </div>`)
+}
+
+async function createScheme() {
+  const name = (el('schName').value || '').trim()
+  if (!name) { toast('请输入方案名称', true); return }
+  const r = await api('/admin/schemes', 'POST', {
+    name,
+    description: (el('schDesc').value || '').trim(),
+    max_errors_before_fallback: parseInt(el('schMaxErr').value) || 10,
+    cooldown_minutes: parseInt(el('schCooldown').value) || 5,
+  })
+  if (!r.ok) { toast(r.data.error || '创建失败', true); return }
+  toast('方案已创建'); closeModal(); loadSchemeList()
+}
+
+async function openEditScheme(id) {
+  const r = await api('/admin/schemes')
+  if (!r.ok) return
+  const s = (r.data.schemes || []).find(x => x.id === id)
+  if (!s) return
+  modal(`<h3>编辑方案</h3>
+    <div style="display:flex;flex-direction:column;gap:12px;margin-top:12px">
+      <label class="field"><span>方案名称</span><input id="schName" value="${esc(s.name)}" /></label>
+      <label class="field"><span>描述</span><input id="schDesc" value="${esc(s.description || '')}" /></label>
+      <div class="row" style="gap:16px">
+        <label class="field"><span>错误回退阈值</span><input id="schMaxErr" type="number" value="${s.max_errors_before_fallback}" min="1" max="100" style="width:80px" /></label>
+        <label class="field"><span>冷却时长（分钟）</span><input id="schCooldown" type="number" value="${s.cooldown_minutes}" min="0" max="1440" style="width:80px" /></label>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="schActive" ${s.is_active ? 'checked' : ''} style="width:auto" />
+        <span>激活方案（激活后学生端可见）</span>
+      </label>
+    </div>
+    <div class="row" style="margin-top:16px">
+      <button class="btn ghost" onclick="closeModal()">取消</button>
+      <button class="btn" onclick="updateScheme(${id})">保存</button>
+    </div>`)
+}
+
+async function updateScheme(id) {
+  const r = await api('/admin/scheme/' + id, 'PUT', {
+    name: (el('schName').value || '').trim(),
+    description: (el('schDesc').value || '').trim(),
+    max_errors_before_fallback: parseInt(el('schMaxErr').value) || 10,
+    cooldown_minutes: parseInt(el('schCooldown').value) || 5,
+    is_active: el('schActive').checked,
+  })
+  if (!r.ok) { toast(r.data.error || '保存失败', true); return }
+  toast('方案已更新'); closeModal(); loadSchemeList()
+}
+
+async function deleteScheme(id, name) {
+  if (!confirm(`确认删除方案「${name}」？\n将同时删除该方案的所有步骤配置、学生分配和进度数据，不可恢复。`)) return
+  const r = await api('/admin/scheme/' + id, 'DELETE')
+  if (!r.ok) { toast(r.data.error || '删除失败', true); return }
+  toast('方案已删除'); loadSchemeList()
+}
+
+/* ---- 步骤配置（方案课程列表 + 勾选步骤） ---- */
+async function openSchemeItems(id) {
+  const [sr, cr] = await Promise.all([
+    api('/admin/scheme/' + id + '/items'),
+    api('/admin/courses'),
+  ])
+  if (!sr.ok || !cr.ok) { toast('加载失败', true); return }
+  const existing = sr.data.items || []
+  const existingMap = {}
+  existing.forEach(it => { existingMap[it.course_id] = it })
+  const courses = (cr.data.courses || []).filter(c => c.sentence_count > 0)
+
+  if (!courses.length) { toast('暂无课程素材，请先在「听说管理」中创建课程', true); return }
+
+  const maxOrder = existing.length ? Math.max(...existing.map(x => x.order_index)) : 0
+
+  const courseRows = courses.map((c, idx) => {
+    const cfg = existingMap[c.id]
+    const steps = (cfg && cfg.steps) ? cfg.steps : []
+    const order = cfg ? cfg.order_index : (maxOrder + idx + 1)
+    const stepCbs = [1, 2, 3, 4].map(s => {
+      const checked = steps.includes(s)
+      return `<label style="margin-right:10px;font-size:13px">
+        <input type="checkbox" class="sch-step-${c.id}" value="${s}" ${checked ? 'checked' : ''} style="width:auto;margin-right:3px" />
+        ${['单词', '句子', '辅助听写', '纯听写'][s-1]}
+      </label>`
+    }).join('')
+    const selectedSteps = steps.length ? `步骤: ${steps.join(',')}` : '未配置'
+    return `<div class="card" style="padding:10px 14px;margin-top:6px">
+      <div class="spread">
+        <div>
+          <b>#${c.id}</b> ${esc(c.title)}
+          <span class="muted" style="margin-left:8px;font-size:12px">(${selectedSteps})</span>
+        </div>
+        <input type="number" value="${order}" class="sch-order-${c.id}" style="width:60px" title="排序序号" min="1" />
+      </div>
+      <div class="row" style="margin-top:6px;flex-wrap:wrap">${stepCbs}</div>
+    </div>`
+  }).join('')
+
+  modal(`<h3>📋 配置课程步骤</h3>
+    <p class="muted" style="margin-top:4px;font-size:13px">勾选每门课程启用的学习步骤，右侧数字为排列顺序（学生学习时将按此顺序依次学习）。</p>
+    <div style="max-height:60vh;overflow:auto;margin-top:8px">${courseRows}</div>
+    <div class="row" style="margin-top:12px;justify-content:space-between">
+      <div>
+        <button class="btn ghost sm" onclick="selectAllSchemeSteps()">全选 1-4</button>
+        <button class="btn ghost sm" onclick="selectSchemeSteps123()">仅 1-3</button>
+        <button class="btn ghost sm" onclick="selectSchemeSteps34()">仅 3-4</button>
+      </div>
+      <div class="row">
+        <button class="btn ghost" onclick="closeModal()">取消</button>
+        <button class="btn" onclick="saveSchemeItems(${id}, ${JSON.stringify(courses.map(c => c.id))})">保存配置</button>
+      </div>
+    </div>`)
+
+  window._schCourseIds = courses.map(c => c.id)
+}
+
+function selectAllSchemeSteps() {
+  const ids = window._schCourseIds || []
+  ids.forEach(cid => {
+    [1, 2, 3, 4].forEach(s => {
+      const cb = document.querySelector(`.sch-step-${cid}[value="${s}"]`)
+      if (cb) cb.checked = true
+    })
+  })
+}
+
+function selectSchemeSteps123() {
+  const ids = window._schCourseIds || []
+  ids.forEach(cid => {
+    [1, 2, 3].forEach(s => {
+      const cb = document.querySelector(`.sch-step-${cid}[value="${s}"]`)
+      if (cb) cb.checked = true
+    })
+    const cb4 = document.querySelector(`.sch-step-${cid}[value="4"]`)
+    if (cb4) cb4.checked = false
+  })
+}
+
+function selectSchemeSteps34() {
+  const ids = window._schCourseIds || []
+  ids.forEach(cid => {
+    [3, 4].forEach(s => {
+      const cb = document.querySelector(`.sch-step-${cid}[value="${s}"]`)
+      if (cb) cb.checked = true
+    })
+    const cb1 = document.querySelector(`.sch-step-${cid}[value="1"]`)
+    if (cb1) cb1.checked = false
+    const cb2 = document.querySelector(`.sch-step-${cid}[value="2"]`)
+    if (cb2) cb2.checked = false
+  })
+}
+
+async function saveSchemeItems(id, courseIds) {
+  const items = courseIds.map(cid => {
+    const steps = []
+    const cbs = document.querySelectorAll(`.sch-step-${cid}:checked`)
+    cbs.forEach(cb => steps.push(parseInt(cb.value)))
+    const orderEl = document.querySelector(`.sch-order-${cid}`)
+    const order = orderEl ? parseInt(orderEl.value) || cid : cid
+    return { course_id: cid, order_index: order, steps }
+  }).filter(it => it.steps.length > 0)
+
+  if (!items.length) { toast('请至少为一门课程勾选步骤', true); return }
+
+  const r = await api('/admin/scheme/' + id + '/items', 'POST', { items })
+  if (!r.ok) { toast(r.data.error || '保存失败', true); return }
+  toast('步骤配置已保存'); closeModal(); loadSchemeList()
+}
+
+/* ---- 学生分配 ---- */
+async function openSchemeStudents(id) {
+  const [sr, ur] = await Promise.all([
+    api('/admin/scheme/' + id + '/students'),
+    api('/admin/students'),
+  ])
+  if (!sr.ok || !ur.ok) { toast('加载失败', true); return }
+  const existingIds = new Set((sr.data.students || []).map(s => s.student_id))
+  const allStudents = ur.data.students || []
+
+  const rows = allStudents.map(s => `<label style="display:block;padding:5px 0">
+    <input type="checkbox" class="sch-stu" value="${s.id}" ${existingIds.has(s.id) ? 'checked' : ''} style="width:auto;margin-right:8px" />
+    ${esc(s.username)} (🪙 ${s.coin_balance})
+  </label>`).join('')
+
+  modal(`<h3>👥 分配学生</h3>
+    <p class="muted" style="margin-top:4px;font-size:13px">勾选将学习此方案的学生。保存后需点击「推送」才会正式生效。</p>
+    <div style="max-height:55vh;overflow:auto;margin-top:8px">
+      ${rows || '<div class="muted">暂无学生</div>'}
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn ghost" onclick="closeModal()">取消</button>
+      <button class="btn" onclick="saveSchemeStudents(${id})">保存学生</button>
+    </div>`)
+}
+
+async function saveSchemeStudents(id) {
+  const cbs = document.querySelectorAll('#modal-root .sch-stu:checked')
+  const student_ids = [...cbs].map(cb => parseInt(cb.value))
+  const r = await api('/admin/scheme/' + id + '/students', 'POST', { student_ids })
+  if (!r.ok) { toast(r.data.error || '保存失败', true); return }
+  toast(`已保存 ${student_ids.length} 名学生`); closeModal(); loadSchemeList()
+}
+
+/* ---- 推送 ---- */
+async function pushScheme(id) {
+  if (!confirm('确认将方案推送给已分配的所有学生？\n已推送过的课程将被跳过（不会重复推送）。')) return
+  const r = await api('/admin/scheme/' + id + '/push', 'POST', {})
+  if (!r.ok) { toast(r.data.error || '推送失败', true); return }
+  toast(r.data.message); loadSchemeList()
+}
+
+/* ---- 进度查看 ---- */
+async function viewSchemeProgress(id) {
+  const r = await api('/admin/scheme/' + id + '/assignments')
+  if (!r.ok) { toast(r.data.error || '加载失败', true); return }
+
+  const data = r.data
+  const courses = data.courses || []
+  const students = data.students || []
+
+  if (!students.length) { toast('该方案尚未分配学生或推送', true); return }
+
+  const stepNames = ['', '单词', '句子', '辅助听写', '纯听写']
+  const headerCols = courses.map(c => {
+    const stepLabels = (c.steps || []).map(s => stepNames[s] || s).join('/')
+    return `<th title="步骤: ${stepLabels}">${esc(c.title) || '#' + c.course_id}<br><small>(${stepLabels})</small></th>`
+  }).join('')
+
+  const bodyRows = students.map(st => {
+    const cells = courses.map(c => {
+      const progress = (st.courses || {})[c.course_id]
+      if (!progress) return '<td class="muted">未推送</td>'
+      if (progress.is_completed) return '<td><span class="tag ok">✅ 完成</span></td>'
+      const done = (progress.completed_steps || []).length
+      const total = (c.steps || []).length
+      const pct = total > 0 ? Math.round(done / total * 100) : 0
+      return `<td>
+        <div style="font-size:13px">Step ${progress.current_step} · ${done}/${total}</div>
+        <div class="progress-bar" style="height:4px;background:var(--border);border-radius:2px;margin-top:4px">
+          <div style="height:100%;width:${pct}%;background:var(--primary,#4361ee);border-radius:2px"></div>
+        </div>
+      </td>`
+    }).join('')
+    return `<tr><td><b>${esc(st.username)}</b></td>${cells}</tr>`
+  }).join('')
+
+  modal(`<h3>📊 方案进度：${esc(data.scheme_name || '')}</h3>
+    <div style="max-height:65vh;overflow:auto;margin-top:10px">
+      <div class="tablewrap"><table class="tbl" style="font-size:12px">
+        <thead><tr><th>学生</th>${headerCols}</tr></thead>
+        <tbody>${bodyRows}</tbody>
+      </table></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn ghost" onclick="closeModal()">关闭</button>
+    </div>`)
 }

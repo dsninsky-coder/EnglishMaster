@@ -24,7 +24,8 @@ from sqlalchemy import func, distinct
 import models
 from models import db, User, AdminShareKey, Course, Sentence, CourseAssignment, \
     StudentSentenceProgress, WrongAnswer, CoinTransaction, ShopItem, PurchaseOrder, \
-    Wish, WishSupport, SystemSetting, CourseWord, Appeal
+    Wish, WishSupport, SystemSetting, CourseWord, Appeal, \
+    CourseScheme, CourseSchemeItem, CourseSchemeStudent, SchemeAssignment, SchemeStepProgress
 from word_data import WordDataManager
 import deepseek_client as ds
 
@@ -52,7 +53,7 @@ DEFAULT_SETTINGS = {
 }
 
 # ================= 系统版本与升级内容（登录页展示 / 数据兼容性参考） =================
-VERSION = 'v1.1.0'
+VERSION = 'v1.1.1'
 # 每个版本是否影响老数据：全部为非破坏性（仅新增列 / 受控数据重映射），无清库操作。
 # 详见 README「数据兼容性」一节；迁移前 init_db.py 会自动备份数据库。
 CHANGELOG = [
@@ -2703,6 +2704,295 @@ def update_course():
                 alignment=alignment_or_empty(s.get('english', ''), s.get('chinese', ''), u)))
     db.session.commit()
     return jsonify(message='课程已更新')
+
+
+# ============================================================
+# 听力大师（v2.0）课程方案管理 API
+# ============================================================
+
+@app.route('/api/v1/admin/schemes', methods=['GET'])
+@admin_only
+def admin_list_schemes():
+    """列出所有课程方案（含学生数和课程数统计）。"""
+    schemes = CourseScheme.query.order_by(CourseScheme.created_at.desc()).all()
+    out = []
+    for s in schemes:
+        item_count = CourseSchemeItem.query.filter_by(scheme_id=s.id).count()
+        student_count = CourseSchemeStudent.query.filter_by(scheme_id=s.id).count()
+        out.append({
+            'id': s.id, 'name': s.name, 'description': s.description or '',
+            'max_errors_before_fallback': s.max_errors_before_fallback,
+            'cooldown_minutes': s.cooldown_minutes,
+            'is_active': s.is_active,
+            'item_count': item_count, 'student_count': student_count,
+            'created_at': str(s.created_at),
+        })
+    return jsonify(schemes=out)
+
+
+@app.route('/api/v1/admin/schemes', methods=['POST'])
+@admin_only
+def admin_create_scheme():
+    """新建课程方案。"""
+    data = request.get_json(silent=True) or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify(error='方案名称不能为空'), 400
+    s = CourseScheme(
+        name=name,
+        description=(data.get('description') or '').strip() or None,
+        max_errors_before_fallback=data.get('max_errors_before_fallback', 10),
+        cooldown_minutes=data.get('cooldown_minutes', 5),
+        is_active=data.get('is_active', False),
+    )
+    db.session.add(s)
+    db.session.commit()
+    return jsonify(message='方案已创建', id=s.id, name=s.name)
+
+
+@app.route('/api/v1/admin/scheme/<int:scheme_id>', methods=['PUT'])
+@admin_only
+def admin_update_scheme(scheme_id):
+    """编辑课程方案。"""
+    s = CourseScheme.query.get_or_404(scheme_id)
+    data = request.get_json(silent=True) or {}
+    if 'name' in data:
+        s.name = data['name'].strip()
+    if 'description' in data:
+        s.description = data['description'].strip() or None
+    if 'max_errors_before_fallback' in data:
+        s.max_errors_before_fallback = int(data['max_errors_before_fallback'])
+    if 'cooldown_minutes' in data:
+        s.cooldown_minutes = int(data['cooldown_minutes'])
+    if 'is_active' in data:
+        s.is_active = bool(data['is_active'])
+    db.session.commit()
+    return jsonify(message='方案已更新', id=s.id)
+
+
+@app.route('/api/v1/admin/scheme/<int:scheme_id>', methods=['DELETE'])
+@admin_only
+def admin_delete_scheme(scheme_id):
+    """删除课程方案（同时删除关联的 items/students/assignments）。"""
+    s = CourseScheme.query.get_or_404(scheme_id)
+    CourseSchemeItem.query.filter_by(scheme_id=scheme_id).delete()
+    CourseSchemeStudent.query.filter_by(scheme_id=scheme_id).delete()
+    SchemeAssignment.query.filter_by(scheme_id=scheme_id).delete()
+    db.session.delete(s)
+    db.session.commit()
+    return jsonify(message='方案已删除')
+
+
+# ---- 方案项目（每个课程启用哪些步骤） ----
+
+@app.route('/api/v1/admin/scheme/<int:scheme_id>/items', methods=['GET'])
+@admin_only
+def admin_get_scheme_items(scheme_id):
+    """获取方案下所有课程步骤配置（按 order_index 排序）。"""
+    CourseScheme.query.get_or_404(scheme_id)
+    items = (CourseSchemeItem.query
+             .filter_by(scheme_id=scheme_id)
+             .order_by(CourseSchemeItem.order_index).all())
+    out = []
+    for it in items:
+        c = Course.query.get(it.course_id)
+        out.append({
+            'id': it.id,
+            'course_id': it.course_id,
+            'course_title': c.title if c else '(已删除)',
+            'order_index': it.order_index,
+            'steps': it.steps or [],
+        })
+    return jsonify(items=out)
+
+
+@app.route('/api/v1/admin/scheme/<int:scheme_id>/items', methods=['POST'])
+@admin_only
+def admin_save_scheme_items(scheme_id):
+    """全量替换方案内的课程步骤配置。
+    请求体: { items: [{course_id, order_index, steps:[1,2,3]}, ...] }
+    """
+    CourseScheme.query.get_or_404(scheme_id)
+    data = request.get_json(silent=True) or {}
+    raw = data.get('items', [])
+    # 删除旧配置
+    CourseSchemeItem.query.filter_by(scheme_id=scheme_id).delete()
+    for it in raw:
+        course_id = int(it.get('course_id', 0))
+        if not course_id:
+            continue
+        steps = it.get('steps', [])
+        if isinstance(steps, list):
+            steps = [int(s) for s in steps if int(s) in (1, 2, 3, 4)]
+        else:
+            steps = []
+        db.session.add(CourseSchemeItem(
+            scheme_id=scheme_id,
+            course_id=course_id,
+            order_index=int(it.get('order_index', 0)) or course_id,
+            steps=steps,
+        ))
+    db.session.commit()
+    return jsonify(message='步骤配置已保存')
+
+
+# ---- 方案学生 ----
+
+@app.route('/api/v1/admin/scheme/<int:scheme_id>/students', methods=['GET'])
+@admin_only
+def admin_get_scheme_students(scheme_id):
+    """获取方案下分配的学生列表。"""
+    CourseScheme.query.get_or_404(scheme_id)
+    rows = (CourseSchemeStudent.query
+            .filter_by(scheme_id=scheme_id).all())
+    out = []
+    for r in rows:
+        u = User.query.get(r.student_id)
+        out.append({
+            'id': r.id,
+            'student_id': r.student_id,
+            'username': u.username if u else '?',
+        })
+    return jsonify(students=out)
+
+
+@app.route('/api/v1/admin/scheme/<int:scheme_id>/students', methods=['POST'])
+@admin_only
+def admin_save_scheme_students(scheme_id):
+    """全量替换方案分配的学生（传入学生ID列表）。
+    请求体: { student_ids: [1,2,3] }
+    """
+    CourseScheme.query.get_or_404(scheme_id)
+    data = request.get_json(silent=True) or {}
+    ids = data.get('student_ids', [])
+    CourseSchemeStudent.query.filter_by(scheme_id=scheme_id).delete()
+    for sid in ids:
+        db.session.add(CourseSchemeStudent(
+            scheme_id=scheme_id,
+            student_id=int(sid),
+        ))
+    db.session.commit()
+    return jsonify(message='学生分配已保存', count=len(ids))
+
+
+# ---- 推送方案到学生 ----
+
+@app.route('/api/v1/admin/scheme/<int:scheme_id>/push', methods=['POST'])
+@admin_only
+def admin_push_scheme(scheme_id):
+    """将方案推送给已分配的学生（创建 SchemeAssignment 记录）。
+    已推送过的学生/课程组合会被跳过（幂等）。
+    请求体: { student_ids: [1,2] }  可选，默认推送方案下所有学生。
+    """
+    s = CourseScheme.query.get_or_404(scheme_id)
+    data = request.get_json(silent=True) or {}
+    # 方案下的课程配置
+    items = CourseSchemeItem.query.filter_by(scheme_id=scheme_id).order_by(
+        CourseSchemeItem.order_index).all()
+    if not items:
+        return jsonify(error='方案中没有配置任何课程，请先设置步骤'), 400
+
+    # 确定学生范围
+    student_ids = data.get('student_ids')
+    if student_ids:
+        students = CourseSchemeStudent.query.filter(
+            CourseSchemeStudent.scheme_id == scheme_id,
+            CourseSchemeStudent.student_id.in_([int(sid) for sid in student_ids]),
+        ).all()
+    else:
+        students = CourseSchemeStudent.query.filter_by(scheme_id=scheme_id).all()
+
+    if not students:
+        return jsonify(error='没有分配学生，请先选学生'), 400
+
+    pushed = 0
+    skipped = 0
+    for st in students:
+        for it in items:
+            # 检查是否已推送
+            existing = SchemeAssignment.query.filter_by(
+                scheme_id=scheme_id,
+                student_id=st.student_id,
+                course_id=it.course_id,
+            ).first()
+            if existing:
+                skipped += 1
+                continue
+            # 创建进度记录
+            step_unlocks = {}
+            for step_num in (1, 2, 3, 4):
+                step_unlocks[str(step_num)] = step_num in (it.steps or [])
+            # 第一个启用的步骤作为 current_step
+            current_step = (it.steps or [1])[0] if it.steps else 1
+            db.session.add(SchemeAssignment(
+                scheme_id=scheme_id,
+                student_id=st.student_id,
+                course_id=it.course_id,
+                current_step=current_step,
+                step_unlocks=step_unlocks,
+                completed_steps=[],
+                perfect_steps=[],
+                step_error_counts={},
+                step_entered_at={},
+                step_fallen_back={},
+            ))
+            pushed += 1
+    db.session.commit()
+    return jsonify(message=f'已推送 {pushed} 门课程（跳过 {skipped} 门已推送的）',
+                   pushed=pushed, skipped=skipped)
+
+
+# ---- 查看学生方案进度 ----
+
+@app.route('/api/v1/admin/scheme/<int:scheme_id>/assignments', methods=['GET'])
+@admin_only
+def admin_scheme_assignments(scheme_id):
+    """按学生分组查看方案进度。返回每个学生每门课的完成状态。"""
+    CourseScheme.query.get_or_404(scheme_id)
+    # 获取方案下所有课程（按 order_index 排序）
+    items = (CourseSchemeItem.query
+             .filter_by(scheme_id=scheme_id)
+             .order_by(CourseSchemeItem.order_index).all())
+    course_map = {}
+    for it in items:
+        c = Course.query.get(it.course_id)
+        course_map[it.course_id] = {
+            'course_id': it.course_id,
+            'title': c.title if c else '(已删除)',
+            'order_index': it.order_index,
+            'steps': it.steps or [],
+        }
+
+    # 获取方案下所有学生
+    students = CourseSchemeStudent.query.filter_by(scheme_id=scheme_id).all()
+    student_map = {}
+    for st in students:
+        u = User.query.get(st.student_id)
+        student_map[st.student_id] = {
+            'student_id': st.student_id,
+            'username': u.username if u else '?',
+            'courses': {},
+        }
+
+    # 获取所有进度记录
+    assignments = SchemeAssignment.query.filter_by(scheme_id=scheme_id).all()
+    for a in assignments:
+        if a.student_id in student_map:
+            student_map[a.student_id]['courses'][a.course_id] = {
+                'course_id': a.course_id,
+                'current_step': a.current_step,
+                'step_unlocks': a.step_unlocks or {},
+                'completed_steps': a.completed_steps or [],
+                'perfect_steps': a.perfect_steps or [],
+                'is_completed': a.is_completed,
+                'step_error_counts': a.step_error_counts or {},
+            }
+
+    return jsonify(
+        scheme_name=CourseScheme.query.get(scheme_id).name,
+        courses=sorted(course_map.values(), key=lambda x: x['order_index']),
+        students=sorted(student_map.values(), key=lambda x: x['username']),
+    )
 
 
 # ---------------- 订单生命周期 + 商品上下架 ----------------
