@@ -291,6 +291,34 @@ def migrate():
         # db.create_all() 已建单词大师新表（word_lists / words / word_user_states / word_exam_configs）
         # appeals 表由 db.create_all() 自动建表（新增模型，无需手动迁移）
 
+        # ================================================================
+        # v2.0 迁移：听力大师
+        # ================================================================
+
+        # course_words: 增加 meaning（中文释义）+ phonetic（IPA 音标）
+        cwcols = [r[1] for r in db.session.execute(text("PRAGMA table_info(course_words)")).fetchall()]
+        if 'meaning' not in cwcols:
+            db.session.execute(text("ALTER TABLE course_words ADD COLUMN meaning TEXT"))
+            db.session.commit()
+            print('[v2.0] 已为 course_words 增加 meaning 列。')
+        if 'phonetic' not in cwcols:
+            db.session.execute(text("ALTER TABLE course_words ADD COLUMN phonetic TEXT"))
+            db.session.commit()
+            print('[v2.0] 已为 course_words 增加 phonetic 列。')
+
+        # appeals: 增加 scheme_id（关联听力大师课程方案）
+        aacols2 = [r[1] for r in db.session.execute(text("PRAGMA table_info(appeals)")).fetchall()]
+        if 'scheme_id' not in aacols2:
+            db.session.execute(text("ALTER TABLE appeals ADD COLUMN scheme_id INTEGER"))
+            db.session.commit()
+            print('[v2.0] 已为 appeals 增加 scheme_id 列。')
+
+        # 新表：course_schemes / course_scheme_items / course_scheme_students
+        #       / scheme_assignments / scheme_step_progress
+        # 由 db.create_all() 在建表阶段自动处理，无需额外 ALTER TABLE。
+        # 但 old db 可能在 create_all 前就存在且无这些表 -> 靠 create_all 补齐。
+        print('[v2.0] 听力大师迁移完成。')
+
 
 def seed_demo():
     if Course.query.count() > 0:

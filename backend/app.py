@@ -52,7 +52,7 @@ DEFAULT_SETTINGS = {
 }
 
 # ================= 系统版本与升级内容（登录页展示 / 数据兼容性参考） =================
-VERSION = 'v0.8.7'
+VERSION = 'v1.1.0'
 # 每个版本是否影响老数据：全部为非破坏性（仅新增列 / 受控数据重映射），无清库操作。
 # 详见 README「数据兼容性」一节；迁移前 init_db.py 会自动备份数据库。
 CHANGELOG = [
@@ -367,6 +367,76 @@ def extract_course_words(course):
             words.append(tl)
     words.sort()
     return words
+
+
+def extract_all_course_words(course):
+    """v2.0: 提取课程全文全部单词（含虚词，按文中首次出现顺序，去重，小写）。"""
+    seen = set()
+    words = []
+    sents = Sentence.query.filter_by(course_id=course.id).order_by(Sentence.sentence_order).all()
+    for s in sents:
+        toks = re.findall(r"[A-Za-z']+", s.english or '')
+        for t in toks:
+            tl = t.lower().strip("'")
+            if len(tl) < 1:
+                continue
+            if tl in seen:
+                continue
+            seen.add(tl)
+            words.append(tl)
+    return words
+
+
+def _generate_phonetic(word):
+    """为单词生成 IPA 音标（eng-to-ipa 离线优先，AI 兜底）。
+
+    返回 (phonetic, source) 元组：成功返回 ('/həˈloʊ/', 'eng-to-ipa')，失败返回 (None, None)。
+    """
+    try:
+        from eng_to_ipa import convert
+        result = convert(word, keep_punct=False, retrieve_all=False)
+        if result and result != word:
+            return (result, 'eng-to-ipa')
+    except Exception:
+        pass
+    # AI 兜底
+    try:
+        prompt = (
+            f'Provide ONLY the IPA phonetic transcription for the English word "{word}" '
+            f'in American English. Output ONLY the IPA symbols between slashes, nothing else. '
+            f'Example: /həˈloʊ/'
+        )
+        r = ds.call(prompt, temperature=0.1)
+        if r:
+            match = re.search(r'/([^/]+)/', r.strip())
+            if match:
+                return (f'/{match.group(1)}/', 'ai')
+    except Exception:
+        pass
+    return (None, None)
+
+
+def _generate_meaning(word, context):
+    """为单词生成中文释义（AI，传入文章上下文确保语境一致）。
+
+    context: 课程 full_text 或全部句子拼接的英文文本。
+    返回 (meaning, source) 元组。
+    """
+    ctx = (context or '')[:2000]
+    try:
+        prompt = (
+            f'根据以下英文文章片段，为单词 "{word}" 生成在该语境下的中文释义。\n'
+            f'只输出中文释义（2-8个字），不要括号、不要拼音、不要例子。\n\n'
+            f'文章片段：\n{ctx}'
+        )
+        r = ds.call(prompt, temperature=0.3)
+        if r:
+            meaning = r.strip().strip('"\'。，, ')
+            if meaning and len(meaning) <= 20:
+                return (meaning, 'ai')
+    except Exception:
+        pass
+    return (None, None)
 
 
 # ---------------- Step1 词色对齐（一次性 AI 生成，存库） ----------------
@@ -2240,11 +2310,13 @@ def admin_course_errors(course_id):
                    has_alignment_issue=(len(missing_alignment) > 0))
 
 
-# ---------------- 课程单词库管理（v0.5 Step7 单词巩固） ----------------
+# ---------------- 课程单词库管理（v0.5 Step7 单词巩固 / v2.0 全文单词+音标+释义） ----------------
 @app.route('/api/v1/admin/course/<int:course_id>/extract-words', methods=['POST'])
 @admin_only
 def admin_extract_words(course_id):
-    """一键提取课程实词并存入 course_words（保留管理员手动添加的词）。"""
+    """一键提取课程实词并存入 course_words（保留管理员手动添加的词）。
+    旧版 v1.0 兼容：仅提取实词，按字母排序，供 Step7 使用。
+    """
     c = Course.query.get_or_404(course_id)
     words = extract_course_words(c)
     # 保留手动添加的词，避免被覆盖
@@ -2258,6 +2330,78 @@ def admin_extract_words(course_id):
     out = CourseWord.query.filter_by(course_id=course_id).order_by(CourseWord.word).all()
     return jsonify(message='已提取并保存单词', count=len(out),
                    words=[{'id': w.id, 'word': w.word, 'is_custom': w.is_custom} for w in out])
+
+
+@app.route('/api/v1/admin/course/<int:course_id>/extract-all-words', methods=['POST'])
+@admin_only
+def admin_extract_all_words_v2(course_id):
+    """v2.0: 提取全文全部单词（含虚词），按文中出现顺序，去重。
+    保留 is_custom=True 的词，仅替换自动提取部分。
+    """
+    c = Course.query.get_or_404(course_id)
+    words = extract_all_course_words(c)
+    custom = {w.word for w in CourseWord.query.filter_by(course_id=course_id, is_custom=True)}
+    CourseWord.query.filter_by(course_id=course_id, is_custom=False).delete()
+    for w in words:
+        if w in custom:
+            continue
+        db.session.add(CourseWord(course_id=course_id, word=w, is_custom=False))
+    db.session.commit()
+    out = CourseWord.query.filter_by(course_id=course_id).all()
+    # 按文中出现顺序排序
+    order = {w: i for i, w in enumerate(words)}
+    out.sort(key=lambda x: order.get(x.word, 9999))
+    return jsonify(message='已提取全文单词（含虚词）', count=len(out),
+                   words=[{'id': w.id, 'word': w.word, 'is_custom': w.is_custom,
+                           'meaning': w.meaning or '', 'phonetic': w.phonetic or ''} for w in out])
+
+
+@app.route('/api/v1/admin/course/<int:course_id>/generate-phonetics', methods=['POST'])
+@admin_only
+def admin_generate_phonetics(course_id):
+    """v2.0: 为课程所有单词批量生成音标（已有音标的跳过）。"""
+    c = Course.query.get_or_404(course_id)
+    words = CourseWord.query.filter_by(course_id=course_id).all()
+    generated = 0
+    details = []
+    for w in words:
+        if w.phonetic:
+            continue
+        ph, src = _generate_phonetic(w.word)
+        if ph:
+            w.phonetic = ph
+            generated += 1
+            details.append({'word': w.word, 'phonetic': ph, 'source': src})
+    db.session.commit()
+    return jsonify(message=f'已生成 {generated}/{len(words)} 个音标', generated=generated, details=details)
+
+
+@app.route('/api/v1/admin/course/<int:course_id>/generate-meanings', methods=['POST'])
+@admin_only
+def admin_generate_meanings(course_id):
+    """v2.0: 为课程所有单词批量生成中文释义（已有释义的跳过）。
+    AI 传入文章全文上下文确保释义准确。
+    """
+    c = Course.query.get_or_404(course_id)
+    # 构建上下文：full_text 或拼接所有句子
+    if c.full_text:
+        context = c.full_text
+    else:
+        sents = Sentence.query.filter_by(course_id=course_id).order_by(Sentence.sentence_order).all()
+        context = ' '.join(s.english for s in sents if s.english)
+    words = CourseWord.query.filter_by(course_id=course_id).all()
+    generated = 0
+    details = []
+    for w in words:
+        if w.meaning:
+            continue
+        meaning, src = _generate_meaning(w.word, context)
+        if meaning:
+            w.meaning = meaning
+            generated += 1
+            details.append({'word': w.word, 'meaning': meaning})
+    db.session.commit()
+    return jsonify(message=f'已生成 {generated}/{len(words)} 个释义', generated=generated, details=details)
 
 
 # ---------------- Step1 词色对齐：管理员手动生成 / 全量回填 ----------------
@@ -2461,22 +2605,44 @@ def admin_update_sentence_alignment(sentence_id):
 def admin_list_words(course_id):
     Course.query.get_or_404(course_id)
     out = CourseWord.query.filter_by(course_id=course_id).order_by(CourseWord.word).all()
-    return jsonify(words=[{'id': w.id, 'word': w.word, 'is_custom': w.is_custom} for w in out])
+    return jsonify(words=[{'id': w.id, 'word': w.word, 'is_custom': w.is_custom,
+                           'meaning': w.meaning or '', 'phonetic': w.phonetic or ''} for w in out])
 
 
 @app.route('/api/v1/admin/course/<int:course_id>/word', methods=['POST'])
 @admin_only
 def admin_add_word(course_id):
     Course.query.get_or_404(course_id)
-    word = ((request.get_json(silent=True) or {}).get('word') or '').strip().lower()
+    data = request.get_json(silent=True) or {}
+    word = data.get('word', '').strip().lower()
     if not word:
         return jsonify(error='单词不能为空'), 400
     if CourseWord.query.filter_by(course_id=course_id, word=word).first():
         return jsonify(error='单词已存在'), 400
-    w = CourseWord(course_id=course_id, word=word, is_custom=True)
+    w = CourseWord(course_id=course_id, word=word, is_custom=True,
+                   meaning=data.get('meaning', '').strip() or None,
+                   phonetic=data.get('phonetic', '').strip() or None)
     db.session.add(w)
     db.session.commit()
-    return jsonify(message='已添加单词', id=w.id, word=w.word, is_custom=True)
+    return jsonify(message='已添加单词', id=w.id, word=w.word, is_custom=True,
+                   meaning=w.meaning or '', phonetic=w.phonetic or '')
+
+
+@app.route('/api/v1/admin/course/<int:course_id>/word/<int:word_id>', methods=['PUT'])
+@admin_only
+def admin_update_word(course_id, word_id):
+    """v2.0: 修改单词的释义和音标（管理员编辑）。"""
+    w = CourseWord.query.get_or_404(word_id)
+    if w.course_id != course_id:
+        return jsonify(error='单词与课程不匹配'), 400
+    data = request.get_json(silent=True) or {}
+    if 'meaning' in data:
+        w.meaning = data['meaning'].strip() or None
+    if 'phonetic' in data:
+        w.phonetic = data['phonetic'].strip() or None
+    db.session.commit()
+    return jsonify(message='已更新', id=w.id, word=w.word,
+                   meaning=w.meaning or '', phonetic=w.phonetic or '')
 
 
 @app.route('/api/v1/admin/course/<int:course_id>/word/<int:word_id>', methods=['DELETE'])

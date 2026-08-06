@@ -403,13 +403,20 @@ async function saveEditCourse(courseId) {
   toast('已保存'); closeModal(); loadCourseList()
 }
 
-/* 课程单词库管理（v0.5 Step7 单词巩固） */
+/* 课程单词库管理（v0.5 Step7 单词巩固 / v2.0 全文单词+音标+释义） */
 async function openWordManager(courseId) {
   modal(`<div id="wmBox"><h3>单词库 · 课程 #${courseId}</h3>
-    <p class="muted" style="font-size:13px">一键提取本课实词（自动去除冠词/介词/助词等虚词，仅保留名词/动词/形容词/副词）。提取后可手动删除或新增。学生做题时直接读取本库，不实时提取。</p>
-    <div class="row" style="margin-top:8px">
-      <button class="btn" onclick="extractWords(${courseId})">⚡ 一键提取单词</button>
+    <p class="muted" style="font-size:13px">
+      <b>旧版（听说大师Step7）</b>：提取实词（去虚词）；<b>新版（听力大师）</b>：提取全文单词（含虚词）+ 音标 + 释义。
+    </p>
+    <div class="row" style="margin-top:8px;gap:6px;flex-wrap:wrap">
+      <button class="btn" onclick="extractWords(${courseId})">⚡ 提取实词</button>
+      <button class="btn" onclick="extractAllWords(${courseId})">📖 提取全文单词</button>
       <button class="btn ghost" onclick="alignCourse(${courseId})">🎨 生成词色标注</button>
+    </div>
+    <div class="row" style="margin-top:6px;gap:6px;flex-wrap:wrap">
+      <button class="btn ghost sm" onclick="genPhonetics(${courseId})">🔊 批量生成音标</button>
+      <button class="btn ghost sm" onclick="genMeanings(${courseId})">📝 批量生成释义</button>
     </div>
     <div class="spread" style="margin-top:12px"><b>当前单词（<span id="wmCount">0</span>）</b>
       <span><input id="wmNew" placeholder="新增单词" style="width:auto" />
@@ -426,17 +433,48 @@ async function loadWordList(courseId) {
   if (!r.ok) { box.innerHTML = `<div class="empty">${esc(r.data.error || '')}</div>`; return }
   const ws = r.data.words || []
   const cnt = el('wmCount'); if (cnt) cnt.textContent = ws.length
-  if (!ws.length) { box.innerHTML = '<div class="muted">暂无单词，点「一键提取单词」生成。</div>'; return }
-  box.innerHTML = ws.map(w => `<div class="wm-row">
-    <span class="wm-word">${esc(w.word)}</span>
+  if (!ws.length) { box.innerHTML = '<div class="muted">暂无单词，点「提取全文单词」生成。</div>'; return }
+  box.innerHTML = ws.map((w, idx) => `<div class="wm-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <span class="wm-word" style="min-width:80px;font-weight:600">${esc(w.word)}</span>
+    ${w.phonetic ? `<span class="tag phonetic" style="font-size:11px;cursor:pointer" title="点击发音" onclick="playYoudao('${esc(w.word)}')">🔊 ${esc(w.phonetic)}</span>` : '<span class="muted" style="font-size:11px">—</span>'}
+    <input class="wm-meaning-inline" value="${esc(w.meaning || '')}" placeholder="释义"
+           style="width:100px;font-size:12px" id="wm-m-${w.id}" />
+    <input class="wm-phonetic-inline" value="${esc(w.phonetic || '')}" placeholder="音标"
+           style="width:100px;font-size:12px" id="wm-p-${w.id}" />
+    <button class="btn ghost sm" onclick="saveWordInline(${courseId}, ${w.id})">💾</button>
     ${w.is_custom ? '<span class="tag" style="font-size:11px">手动</span>' : ''}
     <button class="btn ghost sm" onclick="deleteWord(${courseId}, ${w.id}, '${esc(w.word)}')">删除</button>
+    <button class="btn ghost sm" onclick="playYoudao('${esc(w.word)}')" title="发音">🔊</button>
   </div>`).join('')
+}
+async function saveWordInline(courseId, wordId) {
+  const meaning = (el('wm-m-' + wordId) || {}).value || ''
+  const phonetic = (el('wm-p-' + wordId) || {}).value || ''
+  const r = await api(`/admin/course/${courseId}/word/${wordId}`, 'PUT', { meaning, phonetic })
+  if (!r.ok) { toast(r.data.error || '保存失败', true); return }
+  toast('已保存')
 }
 async function extractWords(courseId) {
   const r = await api(`/admin/course/${courseId}/extract-words`, 'POST', {})
   if (!r.ok) { toast(r.data.error || '提取失败', true); return }
-  toast(`已提取 ${r.data.count} 个单词`); loadWordList(courseId)
+  toast(`已提取 ${r.data.count} 个实词`); loadWordList(courseId)
+}
+async function extractAllWords(courseId) {
+  const r = await api(`/admin/course/${courseId}/extract-all-words`, 'POST', {})
+  if (!r.ok) { toast(r.data.error || '提取失败', true); return }
+  toast(`已提取 ${r.data.count} 个全文单词`); loadWordList(courseId)
+}
+async function genPhonetics(courseId) {
+  toast('正在生成音标…')
+  const r = await api(`/admin/course/${courseId}/generate-phonetics`, 'POST', {})
+  if (!r.ok) { toast(r.data.error || '生成失败', true, true); return }
+  toast(`已生成 ${r.data.generated} 个音标`); loadWordList(courseId)
+}
+async function genMeanings(courseId) {
+  toast('正在生成释义…（需联网 AI）')
+  const r = await api(`/admin/course/${courseId}/generate-meanings`, 'POST', {})
+  if (!r.ok) { toast(r.data.error || '生成失败', true, true); return }
+  toast(`已生成 ${r.data.generated} 个释义`); loadWordList(courseId)
 }
 // 把后端的 errors 列表拼成可读文本（align-all 的 error 带 course 标题）
 function alignErrText(d) {

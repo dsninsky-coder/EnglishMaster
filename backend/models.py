@@ -5,6 +5,11 @@
 - 密码使用 werkzeug 加密（bcrypt 的纯 Python 等价方案，避免原生编译依赖）。
 - course_assignments 额外补充 completed_steps / perfect_steps / completion_awarded，
   用于精确追踪"是否已发过奖励"，避免重复发币。
+
+v2.0（听力大师）新增：
+- CourseWord 增加 meaning / phonetic 字段（全文单词含音标释义）
+- 课程方案系统：CourseScheme / CourseSchemeItem / CourseSchemeStudent / SchemeAssignment / SchemeStepProgress
+- Appeal 增加 scheme_id 关联方案
 """
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -109,9 +114,11 @@ class CourseAssignment(db.Model):
 
 
 class CourseWord(db.Model):
-    """课程单词库（v0.5 单词巩固 Step7）。
+    """课程单词库（v2.0 听力大师全文单词）。
 
-    - 管理员在课程管理界面「一键提取」后存入，仅保留实词（去虚词）；
+    - v2.0 升级：保留全部单词（含冠词/介词/助词等虚词），不再仅保留实词；
+    - meaning：中文释义（AI 根据文章上下文生成，管理员可编辑）；
+    - phonetic：IPA 音标（eng-to-ipa 离线优先 + AI 兜底）；
     - is_custom=True 表示管理员手动添加（重新提取不会删掉它）；
     - 学生做题时直接从本表读取，不实时提取，提升效率。
     """
@@ -120,6 +127,8 @@ class CourseWord(db.Model):
     course_id = db.Column(db.Integer, db.ForeignKey('courses.id'), nullable=False, index=True)
     word = db.Column(db.String(80), nullable=False)
     is_custom = db.Column(db.Boolean, default=False)   # 管理员手动添加
+    meaning = db.Column(db.Text, nullable=True)        # v2.0: 中文释义
+    phonetic = db.Column(db.Text, nullable=True)       # v2.0: IPA 音标
     created_at = db.Column(db.DateTime, default=utcnow)
 
     __table_args__ = (db.UniqueConstraint('course_id', 'word', name='uq_course_word'),)
@@ -181,6 +190,7 @@ class Appeal(db.Model):
     admin_note = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=utcnow)
     resolved_at = db.Column(db.DateTime, nullable=True)
+    scheme_id = db.Column(db.Integer, nullable=True)       # v2.0: 关联课程方案（听力大师）
 
 
 class ShopItem(db.Model):
@@ -240,7 +250,86 @@ class WishSupport(db.Model):
 
 
 # ============================================================
-# 单词大师（WordMaster）独立数据表
+# 听力大师（v2.0）课程方案系统
+# 说明：课程方案独立于素材管理，管理员手动为每篇课程勾选步骤，
+#       极高自由度（可任意排列课程、任意勾选步骤组合）。
+# ============================================================
+
+class CourseScheme(db.Model):
+    """课程方案（如方案 A / B / C...）。"""
+    __tablename__ = 'course_schemes'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    max_errors_before_fallback = db.Column(db.Integer, default=10)  # 回退错误阈值
+    cooldown_minutes = db.Column(db.Integer, default=5)             # 冷却时长（分钟）
+    is_active = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=utcnow)
+
+
+class CourseSchemeItem(db.Model):
+    """方案内每篇课程的步骤配置。"""
+    __tablename__ = 'course_scheme_items'
+    id = db.Column(db.Integer, primary_key=True)
+    scheme_id = db.Column(db.Integer, db.ForeignKey('course_schemes.id'), nullable=False, index=True)
+    course_id = db.Column(db.Integer, db.ForeignKey('courses.id'), nullable=False, index=True)
+    order_index = db.Column(db.Integer, default=0)        # 从 1 开始排序
+    steps = db.Column(db.JSON, default=list)              # 如 [1,2,3] / [1,2,3,4] / [3,4] / [1,3,4]
+
+    __table_args__ = (db.UniqueConstraint('scheme_id', 'course_id', name='uq_scheme_item'),)
+
+
+class CourseSchemeStudent(db.Model):
+    """方案分配的学生。"""
+    __tablename__ = 'course_scheme_students'
+    id = db.Column(db.Integer, primary_key=True)
+    scheme_id = db.Column(db.Integer, db.ForeignKey('course_schemes.id'), nullable=False, index=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+
+    __table_args__ = (db.UniqueConstraint('scheme_id', 'student_id', name='uq_scheme_student'),)
+
+
+class SchemeAssignment(db.Model):
+    """学生方案进度（替代旧 CourseAssignment 用于听力大师）。"""
+    __tablename__ = 'scheme_assignments'
+    id = db.Column(db.Integer, primary_key=True)
+    scheme_id = db.Column(db.Integer, db.ForeignKey('course_schemes.id'), nullable=False, index=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    course_id = db.Column(db.Integer, db.ForeignKey('courses.id'), nullable=False, index=True)
+    current_step = db.Column(db.Integer, default=1)
+    step_unlocks = db.Column(db.JSON, default=dict)        # {1:true, 2:false, 3:false, 4:false}
+    completed_steps = db.Column(db.JSON, default=list)     # [1,2,...]
+    perfect_steps = db.Column(db.JSON, default=list)       # [1,2,...]
+    is_completed = db.Column(db.Boolean, default=False)
+    step_error_counts = db.Column(db.JSON, default=dict)   # {"3":5,"4":2}
+    step_entered_at = db.Column(db.JSON, default=dict)     # {"3":"2026-08-06T10:00:00"}
+    step_fallen_back = db.Column(db.JSON, default=dict)    # {"3":true}
+    appeal_locked = db.Column(db.Boolean, default=False)
+    appeal_suppressed = db.Column(db.JSON, default=list)
+    appeal_suppressed_perfect = db.Column(db.JSON, default=dict)
+    assigned_at = db.Column(db.DateTime, default=utcnow)
+
+    __table_args__ = (db.UniqueConstraint('scheme_id', 'student_id', 'course_id', name='uq_scheme_assignment'),)
+
+
+class SchemeStepProgress(db.Model):
+    """听力大师逐题进度追踪（用于金币计算 + 跳过题目 + 出错计数）。"""
+    __tablename__ = 'scheme_step_progress'
+    id = db.Column(db.Integer, primary_key=True)
+    scheme_id = db.Column(db.Integer, db.ForeignKey('course_schemes.id'), nullable=False, index=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    course_id = db.Column(db.Integer, db.ForeignKey('courses.id'), nullable=False, index=True)
+    sentence_id = db.Column(db.Integer, db.ForeignKey('sentences.id'), nullable=False)
+    question_type = db.Column(db.String(30), nullable=False)  # step3 / step4_dictation / step4_translation
+    attempt_count = db.Column(db.Integer, default=0)           # 本题总尝试次数
+    ever_correct = db.Column(db.Boolean, default=False)        # 是否曾答对（重复答题无金币）
+    first_correct_attempt = db.Column(db.Integer, nullable=True)  # 首次答对是第几次
+    coins_awarded = db.Column(db.Integer, default=0)           # 已发金币
+    skipped = db.Column(db.Boolean, default=False)             # 是否被跳过等待回头
+    last_attempt_at = db.Column(db.DateTime, default=utcnow)
+
+    __table_args__ = (db.UniqueConstraint('scheme_id', 'student_id', 'course_id', 'sentence_id', 'question_type',
+                                          name='uq_scheme_step_progress'),)
 # 说明：单词大师的「单词库 / 用户学习历史 / 考试配置」与听说大师完全独立；
 #       账号 / 金币 / 商店 / 许愿池 复用上方共享表（users / coin_transactions 等）。
 # ============================================================
