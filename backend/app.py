@@ -53,7 +53,7 @@ DEFAULT_SETTINGS = {
 }
 
 # ================= 系统版本与升级内容（登录页展示 / 数据兼容性参考） =================
-VERSION = 'v1.1.1'
+VERSION = 'v1.4.0'
 # 每个版本是否影响老数据：全部为非破坏性（仅新增列 / 受控数据重映射），无清库操作。
 # 详见 README「数据兼容性」一节；迁移前 init_db.py 会自动备份数据库。
 CHANGELOG = [
@@ -2993,6 +2993,575 @@ def admin_scheme_assignments(scheme_id):
         courses=sorted(course_map.values(), key=lambda x: x['order_index']),
         students=sorted(student_map.values(), key=lambda x: x['username']),
     )
+
+
+# ============================================================
+# 听力大师（v2.0）学生端学习 API
+# ============================================================
+
+def _get_scheme_assignment(student_id, course_id):
+    """获取学生某课程的最新有效方案分配（取最近推送的活跃方案）。"""
+    return (SchemeAssignment.query
+            .filter_by(student_id=student_id, course_id=course_id)
+            .join(CourseScheme, CourseScheme.id == SchemeAssignment.scheme_id)
+            .filter(CourseScheme.is_active == True)
+            .order_by(SchemeAssignment.assigned_at.desc())
+            .first())
+
+
+def _get_scheme(student_id):
+    """获取学生所属的活跃课程方案。"""
+    return (CourseScheme.query
+            .join(CourseSchemeStudent, CourseSchemeStudent.scheme_id == CourseScheme.id)
+            .filter(CourseSchemeStudent.student_id == student_id, CourseScheme.is_active == True)
+            .first())
+
+
+def _check_cooldown(assignment, target_step):
+    """检查回退冷却：从回退发生到再次进入目标步的间隔是否 < cooldown_minutes。"""
+    scheme = CourseScheme.query.get(assignment.scheme_id)
+    if not scheme or not scheme.cooldown_minutes:
+        return None  # 无冷却配置
+    fb = assignment.step_fallen_back or {}
+    # 只有当目标步曾被回退过，才检查冷却
+    if not fb.get(str(target_step)):
+        return None
+    entered = assignment.step_entered_at or {}
+    # 回退时记录的 entered_at[prev_step] 就是回退发生时间（离开目标步的时间）
+    # 从所有 entered_at 中找到最晚的非目标步时间（即最近一次回退时间）
+    last_fallback_time = None
+    for k, v in entered.items():
+        if k == str(target_step):
+            continue
+        try:
+            t = datetime.datetime.fromisoformat(v)
+            if last_fallback_time is None or t > last_fallback_time:
+                last_fallback_time = t
+        except Exception:
+            pass
+    if not last_fallback_time:
+        return None
+    delta = (datetime.datetime.utcnow() - last_fallback_time).total_seconds() / 60.0
+    if delta < scheme.cooldown_minutes:
+        w = int(scheme.cooldown_minutes - delta + 1)
+        return f'冷却中，还需等待约 {w} 分钟才能进入（防止刷答案）'
+    return None
+
+
+@app.route('/api/v1/scheme/my', methods=['GET'])
+@jwt_required()
+def scheme_my_courses():
+    """学生查看听力大师中分配的课程列表（按方案 order_index 排序）。"""
+    u = current_user()
+    scheme = _get_scheme(u.id)
+    if not scheme:
+        return jsonify(has_scheme=False, courses=[], message='尚未分配听力大师课程方案')
+    # 获取方案下的课程（按 order_index）
+    items = (CourseSchemeItem.query
+             .filter_by(scheme_id=scheme.id)
+             .order_by(CourseSchemeItem.order_index).all())
+    courses_out = []
+    for it in items:
+        c = Course.query.get(it.course_id)
+        if not c:
+            continue
+        asm = SchemeAssignment.query.filter_by(
+            scheme_id=scheme.id, student_id=u.id, course_id=it.course_id).first()
+        # 解锁规则：按顺序，前一个必须完成才能解锁下一个
+        unlocked = True
+        prev_item_idx = None
+        for idx, pi in enumerate(items):
+            if pi.course_id == it.course_id:
+                prev_item_idx = idx
+                break
+        if prev_item_idx is not None and prev_item_idx > 0:
+            prev_item = items[prev_item_idx - 1]
+            prev_asm = SchemeAssignment.query.filter_by(
+                scheme_id=scheme.id, student_id=u.id, course_id=prev_item.course_id).first()
+            if prev_asm and not prev_asm.is_completed:
+                unlocked = False
+
+        courses_out.append({
+            'course_id': c.id,
+            'title': c.title,
+            'order_index': it.order_index,
+            'steps': it.steps or [],
+            'unlocked': unlocked,
+            'current_step': asm.current_step if asm else (it.steps[0] if it.steps else 1),
+            'completed_steps': asm.completed_steps if asm else [],
+            'is_completed': asm.is_completed if asm else False,
+        })
+    return jsonify(has_scheme=True, scheme_name=scheme.name, courses=courses_out)
+
+
+@app.route('/api/v1/scheme/learn/<int:course_id>/state', methods=['GET'])
+@jwt_required()
+def scheme_learn_state(course_id):
+    """获取学生某课程的学习状态（用于听力大师学习页面）。"""
+    u = current_user()
+    asm = _get_scheme_assignment(u.id, course_id)
+    if not asm:
+        return jsonify(error='未分配该课程'), 404
+    scheme = CourseScheme.query.get(asm.scheme_id)
+    item = CourseSchemeItem.query.filter_by(
+        scheme_id=asm.scheme_id, course_id=course_id).first()
+    enabled_steps = item.steps if item else [1, 2, 3, 4]
+    # 每个启用步骤的句子数
+    sentences = Sentence.query.filter_by(course_id=course_id).order_by(
+        Sentence.sentence_order).all()
+    sent_count = len(sentences)
+    # 回退冷却检查
+    cooldown_msg = _check_cooldown(asm, asm.current_step)
+    return jsonify(
+        scheme_id=asm.scheme_id,
+        course_id=course_id,
+        current_step=asm.current_step,
+        step_unlocks=asm.step_unlocks or {},
+        completed_steps=asm.completed_steps or [],
+        perfect_steps=asm.perfect_steps or [],
+        is_completed=asm.is_completed,
+        enabled_steps=enabled_steps,
+        sent_count=sent_count,
+        error_counts=asm.step_error_counts or {},
+        max_errors=scheme.max_errors_before_fallback,
+        cooldown_minutes=scheme.cooldown_minutes,
+        cooldown_msg=cooldown_msg,
+        appeal_locked=asm.appeal_locked,
+    )
+
+
+@app.route('/api/v1/scheme/learn/<int:course_id>/words', methods=['GET'])
+@jwt_required()
+def scheme_learn_words(course_id):
+    """听力大师 Step1：获取课程全文单词（含音标/释义/出现顺序）。"""
+    u = current_user()
+    asm = _get_scheme_assignment(u.id, course_id)
+    if not asm:
+        return jsonify(error='未分配该课程'), 404
+    words = (CourseWord.query
+             .filter_by(course_id=course_id)
+             .order_by(CourseWord.created_at).all())
+    if not words:
+        # 若尚未提取，自动提取全文单词
+        c = Course.query.get(course_id)
+        if c:
+            wlist = extract_all_course_words(c)
+            for w in wlist:
+                db.session.add(CourseWord(course_id=course_id, word=w))
+            db.session.commit()
+            words = (CourseWord.query
+                     .filter_by(course_id=course_id)
+                     .order_by(CourseWord.created_at).all())
+    return jsonify(words=[{
+        'id': w.id, 'word': w.word,
+        'meaning': w.meaning or '', 'phonetic': w.phonetic or '',
+    } for w in words])
+
+
+@app.route('/api/v1/scheme/learn/<int:course_id>/sentences', methods=['GET'])
+@jwt_required()
+def scheme_learn_sentences(course_id):
+    """听力大师学习页：获取课程全部句子。"""
+    u = current_user()
+    asm = _get_scheme_assignment(u.id, course_id)
+    if not asm:
+        return jsonify(error='未分配该课程'), 404
+    sentences = Sentence.query.filter_by(course_id=course_id).order_by(
+        Sentence.sentence_order).all()
+    c = Course.query.get(course_id)
+    return jsonify(
+        course={'id': c.id, 'title': c.title},
+        sentences=[{
+            'id': s.id,
+            'sentence_order': s.sentence_order,
+            'english': s.english,
+            'chinese': s.chinese,
+            'audio_url': s.audio_url or '',
+        } for s in sentences],
+        total_steps=len(Sentence.query.filter_by(course_id=course_id).all()),
+    )
+
+
+def _grade_step3(user_input, sentence, key, proxy):
+    """Step3 判分：给音+义，学生写英文。
+    本地英文词匹配优先，不通过用 AI 兜底。
+    """
+    passed, matched, total = ds.local_english_match(user_input, sentence.english)
+    if passed:
+        return True, {'method': 'local', 'matched': f'{matched}/{total}'}
+    if key:
+        ai = ds.ai_score_english(key, user_input, sentence.english, task='en',
+                                 base_url=proxy['base_url'], model=proxy['model'])
+        if ai is not None and ai >= 0.75:
+            return True, {'method': 'ai', 'similarity': round(ai, 3)}
+    return False, {'method': 'local', 'matched': f'{matched}/{total}'}
+
+
+def _grade_step4a(user_input, sentence, key, proxy):
+    """Step4-A 判分：纯听写（给音写形），同 Step3 但无义提示，阈值更宽。"""
+    passed, matched, total = ds.local_english_match(user_input, sentence.english)
+    if passed:
+        return True, {'method': 'local', 'matched': f'{matched}/{total}'}
+    if key:
+        ai = ds.ai_score_english(key, user_input, sentence.english, task='en',
+                                 base_url=proxy['base_url'], model=proxy['model'])
+        if ai is not None and ai >= 0.70:
+            return True, {'method': 'ai', 'similarity': round(ai, 3)}
+    return False, {'method': 'local', 'matched': f'{matched}/{total}'}
+
+
+def _grade_step4b(user_input, sentence, key, proxy):
+    """Step4-B 判分：翻译成中文。本地字符相似度优先，不通过用 AI。"""
+    local_sim = ds.local_similarity(user_input, sentence.chinese)
+    if local_sim >= 0.70:
+        return True, {'method': 'local', 'similarity': round(local_sim, 3)}
+    if key:
+        ai = ds.ai_score_chinese(key, user_input, sentence.chinese,
+                                 base_url=proxy['base_url'], model=proxy['model'])
+        sim = ai if ai is not None else local_sim
+        if sim >= 0.75:
+            return True, {'method': 'ai', 'similarity': round(sim, 3)}
+    return False, {'method': 'local', 'similarity': round(local_sim, 3)}
+
+
+@app.route('/api/v1/scheme/step/submit', methods=['POST'])
+@jwt_required()
+def scheme_step_submit():
+    """听力大师答题提交（Step 3/4）。"""
+    u = current_user()
+    u.last_task_date = datetime.date.today()
+    data = request.get_json(silent=True) or {}
+    course_id = int(data.get('course_id', 0))
+    sentence_id = int(data.get('sentence_id', 0))
+    question_type = (data.get('question_type') or '').strip()  # step3 / step4_dictation / step4_translation
+    user_input = (data.get('user_input') or '').strip()
+    if not user_input:
+        return jsonify(error='请输入回答'), 400
+
+    asm = _get_scheme_assignment(u.id, course_id)
+    if not asm:
+        return jsonify(error='未分配该课程'), 404
+
+    s = Sentence.query.get_or_404(sentence_id)
+    scheme = CourseScheme.query.get(asm.scheme_id)
+    key = resolve_api_key(u)
+    proxy = get_ai_proxy()
+
+    # 判分
+    if question_type == 'step3':
+        correct, detail = _grade_step3(user_input, s, key, proxy)
+    elif question_type == 'step4_dictation':
+        correct, detail = _grade_step4a(user_input, s, key, proxy)
+    elif question_type == 'step4_translation':
+        correct, detail = _grade_step4b(user_input, s, key, proxy)
+    else:
+        return jsonify(error='无效的 question_type'), 400
+
+    # 更新/创建进度记录
+    prog = SchemeStepProgress.query.filter_by(
+        scheme_id=asm.scheme_id, student_id=u.id,
+        course_id=course_id, sentence_id=sentence_id,
+        question_type=question_type,
+    ).first()
+    if not prog:
+        prog = SchemeStepProgress(
+            scheme_id=asm.scheme_id, student_id=u.id,
+            course_id=course_id, sentence_id=sentence_id,
+            question_type=question_type,
+        )
+        db.session.add(prog)
+
+    prog.attempt_count = (prog.attempt_count or 0) + 1
+    prog.last_attempt_at = models.utcnow()
+
+    # 金币计算：
+    coins_earned = 0
+    if correct and not prog.ever_correct:
+        # 首次答对
+        prog.ever_correct = True
+        prog.first_correct_attempt = prog.attempt_count
+        if prog.attempt_count == 1:
+            coins_earned = 2  # 一次答对 2 金币
+        elif prog.attempt_count == 2:
+            coins_earned = 1  # 两次答对 1 金币
+        # 3次及以上 0 金币
+        if coins_earned > 0:
+            step_label = {'step3': 'Step3', 'step4_dictation': 'Step4-听写',
+                          'step4_translation': 'Step4-翻译'}.get(question_type, question_type)
+            add_coins(u.id, coins_earned,
+                      f'听力大师·{step_label}·第{prog.attempt_count}次答对',
+                      category='study')
+            prog.coins_awarded = coins_earned
+    elif correct and prog.ever_correct:
+        # 重复答对无金币
+        pass
+
+    # 记录错误
+    if not correct:
+        record_wrong(u.id, s.id,
+                     1 if question_type == 'step3' else 4,
+                     user_input,
+                     s.english if question_type != 'step4_translation' else s.chinese,
+                     '作答错误')
+        # 更新步骤错误计数
+        ec = dict(asm.step_error_counts or {})
+        step_key = question_type.split('_')[0]  # 'step3' or 'step4'
+        ec[step_key] = (ec.get(step_key, 0) or 0) + 1
+        asm.step_error_counts = ec
+
+    db.session.commit()
+
+    return jsonify(
+        correct=correct,
+        coins_earned=coins_earned,
+        balance=u.coin_balance,
+        attempt_count=prog.attempt_count,
+        ever_correct=prog.ever_correct,
+        first_correct_attempt=prog.first_correct_attempt,
+        detail=detail,
+        # 答错不显答案
+        standard_answer=(s.english if (correct and question_type != 'step4_translation') else
+                        (s.chinese if (correct and question_type == 'step4_translation') else None)),
+    )
+
+
+@app.route('/api/v1/scheme/step/skip', methods=['POST'])
+@jwt_required()
+def scheme_step_skip():
+    """听力大师跳过题目（放到队列末尾，必须全部答完才能结束）。"""
+    u = current_user()
+    data = request.get_json(silent=True) or {}
+    course_id = int(data.get('course_id', 0))
+    sentence_id = int(data.get('sentence_id', 0))
+    question_type = (data.get('question_type') or '').strip()
+
+    asm = _get_scheme_assignment(u.id, course_id)
+    if not asm:
+        return jsonify(error='未分配该课程'), 404
+
+    # 标记本题为跳过
+    prog = SchemeStepProgress.query.filter_by(
+        scheme_id=asm.scheme_id, student_id=u.id,
+        course_id=course_id, sentence_id=sentence_id,
+        question_type=question_type,
+    ).first()
+    if prog:
+        prog.skipped = True
+        db.session.commit()
+
+    return jsonify(skipped=True, message='题目已跳过，稍后继续')
+
+
+@app.route('/api/v1/scheme/step/finish', methods=['POST'])
+@jwt_required()
+def scheme_step_finish():
+    """听力大师步骤完成（解锁下一步）。"""
+    u = current_user()
+    data = request.get_json(silent=True) or {}
+    course_id = int(data.get('course_id', 0))
+    step = int(data.get('step', 0))
+
+    asm = _get_scheme_assignment(u.id, course_id)
+    if not asm:
+        return jsonify(error='未分配该课程'), 404
+
+    item = CourseSchemeItem.query.filter_by(
+        scheme_id=asm.scheme_id, course_id=course_id).first()
+    enabled = item.steps if item else [1, 2, 3, 4]
+
+    # 标记本步完成
+    completed = list(asm.completed_steps or [])
+    if step not in completed:
+        completed.append(step)
+    asm.completed_steps = completed
+
+    # 找下一个启用的步骤
+    next_step = None
+    for s in enabled:
+        if s > step:
+            next_step = s
+            break
+
+    if next_step:
+        unlocks = dict(asm.step_unlocks or {})
+        unlocks[str(next_step)] = True
+        asm.step_unlocks = unlocks
+        asm.current_step = next_step
+        # 记录进入时间
+        entered = dict(asm.step_entered_at or {})
+        entered[str(next_step)] = datetime.datetime.utcnow().isoformat()
+        asm.step_entered_at = entered
+    else:
+        # 所有步骤完成
+        asm.is_completed = True
+
+    # 清除本步错误计数
+    ec = dict(asm.step_error_counts or {})
+    ec.pop(str(step), None)
+    asm.step_error_counts = ec
+
+    db.session.commit()
+
+    # 检查下一门课程是否解锁
+    items = (CourseSchemeItem.query
+             .filter_by(scheme_id=asm.scheme_id)
+             .order_by(CourseSchemeItem.order_index).all())
+    next_course = None
+    for i, it in enumerate(items):
+        if it.course_id == course_id and i + 1 < len(items):
+            next_course = items[i + 1].course_id
+            break
+
+    return jsonify(
+        completed=True,
+        next_step=next_step,
+        next_course=next_course,
+        is_course_completed=asm.is_completed,
+        completed_steps=completed,
+    )
+
+
+@app.route('/api/v1/scheme/step/fallback', methods=['POST'])
+@jwt_required()
+def scheme_step_fallback():
+    """听力大师回退到上一步（错误次数超阈值时触发）。"""
+    u = current_user()
+    data = request.get_json(silent=True) or {}
+    course_id = int(data.get('course_id', 0))
+    from_step = int(data.get('from_step', 0))
+
+    asm = _get_scheme_assignment(u.id, course_id)
+    if not asm:
+        return jsonify(error='未分配该课程'), 404
+
+    scheme = CourseScheme.query.get(asm.scheme_id)
+    item = CourseSchemeItem.query.filter_by(
+        scheme_id=asm.scheme_id, course_id=course_id).first()
+    enabled = item.steps if item else [1, 2, 3, 4]
+
+    # 检查错误阈值
+    ec = dict(asm.step_error_counts or {})
+    error_count = ec.get(str(from_step), 0) or 0
+    max_errors = scheme.max_errors_before_fallback if scheme else 10
+    if error_count < max_errors:
+        return jsonify(error=f'错误次数（{error_count}）未达回退阈值（{max_errors}），无法回退'), 400
+
+    # 找到上一步
+    prev_step = None
+    for s in enabled:
+        if s >= from_step:
+            break
+        prev_step = s
+
+    if prev_step is None:
+        return jsonify(error='已是第一步，无法回退'), 400
+
+    # 执行回退
+    asm.current_step = prev_step
+    unlocks = dict(asm.step_unlocks or {})
+    unlocks[str(prev_step)] = True
+    asm.step_unlocks = unlocks
+
+    # 标记回退
+    fb = dict(asm.step_fallen_back or {})
+    fb[str(from_step)] = True
+    asm.step_fallen_back = fb
+
+    # 记录进入上一步时间（触发冷却）
+    entered = dict(asm.step_entered_at or {})
+    entered[str(prev_step)] = datetime.datetime.utcnow().isoformat()
+    asm.step_entered_at = entered
+
+    # 清除当前步错误计数
+    ec.pop(str(from_step), None)
+    asm.step_error_counts = ec
+
+    # 清除上一步的完成记录（需重新巩固）
+    completed = [s for s in (asm.completed_steps or []) if s != prev_step]
+    asm.completed_steps = completed
+
+    db.session.commit()
+
+    return jsonify(
+        fallback_to=prev_step,
+        cooldown_minutes=scheme.cooldown_minutes if scheme else 5,
+        message=f'已回退到 Step {prev_step}，请重新巩固后再试',
+    )
+
+
+@app.route('/api/v1/scheme/step/appeal', methods=['POST'])
+@jwt_required()
+def scheme_step_appeal():
+    """听力大师人工复议（花费 2 金币）。"""
+    u = current_user()
+    data = request.get_json(silent=True) or {}
+    course_id = int(data.get('course_id', 0))
+    sentence_id = int(data.get('sentence_id', 0))
+    question_type = (data.get('question_type') or '').strip()
+    user_input = (data.get('user_input') or '').strip()
+    standard_answer = (data.get('standard_answer') or '').strip()
+
+    asm = _get_scheme_assignment(u.id, course_id)
+    if not asm:
+        return jsonify(error='未分配该课程'), 404
+
+    s = Sentence.query.get(sentence_id) if sentence_id else None
+
+    # 防重复
+    dup = Appeal.query.filter_by(
+        student_id=u.id, course_id=course_id, status='pending',
+        scheme_id=asm.scheme_id,
+    ).filter_by(sentence_id=sentence_id).first()
+    if dup:
+        return jsonify(error='该题目已申请复议，等待审核中', already=True)
+
+    if (u.coin_balance or 0) < APPEAL_COST:
+        return jsonify(error=f'金币不足，无法申请人工复议（需 {APPEAL_COST} 金币）'), 400
+
+    add_coins(u.id, -APPEAL_COST,
+              f'听力大师·人工复议（{question_type}）',
+              category='appeal')
+
+    step_map = {'step3': 3, 'step4_dictation': 4, 'step4_translation': 4}
+    step_num = step_map.get(question_type, 4)
+
+    db.session.add(Appeal(
+        student_id=u.id, course_id=course_id, step=step_num,
+        sentence_id=sentence_id, student_answer=user_input,
+        standard_answer=standard_answer, status='pending',
+        scheme_id=asm.scheme_id,
+    ))
+    db.session.commit()
+
+    return jsonify(ok=True, cost=APPEAL_COST, balance=u.coin_balance,
+                   message=f'已申请人工复议，扣除 {APPEAL_COST} 金币，等待管理员审核')
+
+
+@app.route('/api/v1/scheme/step/progress', methods=['GET'])
+@jwt_required()
+def scheme_step_progress():
+    """获取学生在某课程某步骤的逐题进度（用于金币状态展示）。"""
+    u = current_user()
+    course_id = int(request.args.get('course_id', 0))
+    question_type = (request.args.get('question_type') or '').strip()
+
+    asm = _get_scheme_assignment(u.id, course_id)
+    if not asm:
+        return jsonify(progress=[])
+
+    items = SchemeStepProgress.query.filter_by(
+        scheme_id=asm.scheme_id, student_id=u.id,
+        course_id=course_id, question_type=question_type,
+    ).all()
+
+    return jsonify(progress=[{
+        'sentence_id': p.sentence_id,
+        'attempt_count': p.attempt_count,
+        'ever_correct': p.ever_correct,
+        'first_correct_attempt': p.first_correct_attempt,
+        'coins_awarded': p.coins_awarded,
+        'skipped': p.skipped,
+    } for p in items])
 
 
 # ---------------- 订单生命周期 + 商品上下架 ----------------

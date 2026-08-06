@@ -16,7 +16,8 @@ async function renderHome() {
     : `<p class="muted" style="margin-top:8px">连续签到越久奖励越高</p>`
 
   const cards = [
-    { icon: '🎧', title: '听说大师', desc: '五步法闯关 · 沉浸式听说深度学习', go: "nav('#/listen')", theme: 'a' },
+    { icon: '🎯', title: '听力大师', desc: '四步渐进 · 单词→句子→听写→翻译', go: "nav('#/scheme')", theme: 'd' },
+    { icon: '🎧', title: '听说大师', desc: '七步法闯关 · 沉浸式听说深度学习', go: "nav('#/listen')", theme: 'a' },
     { icon: '📚', title: '单词大师', desc: '艾宾浩斯记忆曲线 · 背单词 / 复习 / 考试', go: "window.location.href='/study'", theme: 'b' },
     { icon: '🎁', title: '奖励中心', desc: '金币 · 商城 · 许愿池 · 用努力兑换奖励', go: "nav('#/rewards')", theme: 'c' },
   ].map(c => `<div class="entry-card entry-${c.theme}" onclick="${c.go}">
@@ -1212,4 +1213,527 @@ function shuffle(arr) {
     const j = Math.floor(Math.random() * (i + 1));[a[i], a[j]] = [a[j], a[i]]
   }
   return a
+}
+
+/* ================================================================
+   听力大师（v2.0）学生端 — 4 步学习系统
+   ================================================================ */
+
+let SL = { /* SchemeLearn state */
+  schemeId: null, courseId: null,
+  courses: [], courseIdx: 0,
+  currentStep: 1, sentCount: 0,
+  maxErrors: 10, cooldown: 5, cooldownMsg: '',
+  sentences: [], words: [],
+  // Step 3/4 queue
+  queue: [], qIdx: 0, skipped: new Set(),
+  errorCount: {}, coinsThisStep: 0,
+  stepProgress: {},
+  // Step 4 split: one queue for dictation, one for translation
+  q4a: [], q4aIdx: 0, q4b: [], q4bIdx: 0,
+  inStep4a: true,
+  appealLocked: false,
+}
+
+/* 课程列表 */
+async function renderSchemeHome() {
+  const r = await api('/scheme/my')
+  if (!r.ok) { el('app').innerHTML = studentFrame(`<div class="empty">加载失败：${esc(r.data.error || '')}</div>`); return }
+  const d = r.data
+  if (!d.has_scheme) {
+    el('app').innerHTML = studentFrame(`
+      <div class="spread" style="margin-bottom:12px">
+        <h3>听力大师</h3>
+        <button class="btn ghost sm" onclick="nav('#/')">← 返回入口</button>
+      </div>
+      <div class="empty">${d.message || '等待老师推送课程方案'}<br/>暂时还没有可学习的课程</div>
+    `, 'home')
+    return
+  }
+  const coursesHtml = (d.courses || []).map(c => {
+    const done = c.completed_steps || []
+    const total = (c.steps || []).length
+    const pct = total ? Math.round(done.length / total * 100) : 0
+    const cs = c.current_step || 1
+    if (!c.unlocked) {
+      return `<div class="card course-card" style="opacity:0.5">
+        <div>
+          <div style="font-weight:600">🔒 ${esc(c.title)}</div>
+          <div class="muted" style="font-size:13px">完成上一门课程后解锁</div>
+        </div>
+        <button class="btn" disabled style="opacity:.5;cursor:not-allowed">🔒 未解锁</button>
+      </div>`
+    }
+    const label = c.is_completed ? '✅ 完成' : `Step ${cs} · ${pct}%`
+    const cls = c.is_completed ? 'ghost' : ''
+    return `<div class="card course-card">
+      <div>
+        <div style="font-weight:600">${esc(c.title)}</div>
+        <div class="muted" style="font-size:13px">${label} · 步骤: [${c.steps.join(',')}]</div>
+      </div>
+      <button class="btn ${cls}" onclick="nav('#/scheme/learn/${c.course_id}')">${c.is_completed ? '回顾' : '开始'}</button>
+    </div>`
+  }).join('') || '<div class="empty">方案中没有配置课程</div>'
+
+  el('app').innerHTML = studentFrame(`
+    <div class="spread" style="margin-bottom:12px">
+      <h3>听力大师 · ${esc(d.scheme_name)}</h3>
+      <button class="btn ghost sm" onclick="nav('#/')">← 返回入口</button>
+    </div>
+    ${coursesHtml}
+  `, 'home')
+}
+
+/* 进入学习 */
+async function renderSchemeLearn(courseId) {
+  const [st, sent] = await Promise.all([
+    api(`/scheme/learn/${courseId}/state`),
+    api(`/scheme/learn/${courseId}/sentences`),
+  ])
+  if (!st.ok) { toast(st.data.error || '加载失败', true); nav('#/scheme'); return }
+  const sd = st.data; const sd2 = sent.data || {}
+  SL = {
+    schemeId: sd.scheme_id, courseId: courseId,
+    currentStep: sd.current_step, sentCount: sd.sent_count,
+    maxErrors: sd.max_errors, cooldown: sd.cooldown_minutes,
+    cooldownMsg: sd.cooldown_msg || '',
+    sentences: sd2.sentences || [],
+    course: sd2.course || {},
+    enabledSteps: sd.enabled_steps || [],
+    completedSteps: sd.completed_steps || [],
+    stepUnlocks: sd.step_unlocks || {},
+    errorCount: sd.error_counts || {},
+    coinsThisStep: 0, queue: [], qIdx: 0, skipped: new Set(),
+    words: [], stepProgress: {},
+    q4a: [], q4aIdx: 0, q4b: [], q4bIdx: 0, inStep4a: true,
+    appealLocked: sd.appeal_locked || false,
+  }
+  drawSchemeLearn()
+}
+
+function drawSchemeLearn() {
+  const total = SL.sentences.length
+  const enabled = SL.enabledSteps
+  const stepsHtml = [1, 2, 3, 4].map(n => {
+    if (!enabled.includes(n)) return ''
+    const locked = !SL.stepUnlocks[String(n)] && n > 1 && !SL.completedSteps.includes(n)
+    const done = SL.completedSteps.includes(n)
+    const active = SL.currentStep === n
+    let cls = ''
+    if (active) cls = 'active'
+    else if (done) cls = 'done'
+    else if (locked) cls = 'locked'
+    const names = {1:'单词熟悉',2:'句子理解',3:'辅助听写',4:'纯听写+翻译'}
+    const icon = locked ? '🔒 ' : (done ? '✅ ' : '')
+    return `<div class="step-pill ${cls}" ${locked ? '' : `onclick="SLGoStep(${n})"`}>${icon}Step ${n} · ${names[n]}</div>`
+  }).filter(Boolean).join('')
+
+  el('app').innerHTML = studentFrame(`
+    <div class="card">
+      <h3>${esc(SL.course.title || '课程')}</h3>
+      <div class="muted">共 ${total} 句 · 步骤: [${enabled.join(',')}]</div>
+      <div class="muted" style="font-size:12px">回退阈值: ${SL.maxErrors} 次错误 · 冷却: ${SL.cooldown} 分钟</div>
+      ${SL.cooldownMsg ? `<div class="muted" style="color:#e74c3c;font-size:12px">⚠️ ${SL.cooldownMsg}</div>` : ''}
+      <div class="steps">${stepsHtml}</div>
+    </div>
+    <div id="step-body"></div>
+  `, 'home')
+  drawSLStepBody()
+}
+
+function SLGoStep(n) {
+  if (n > 1 && !SL.stepUnlocks[String(n)] && !SL.completedSteps.includes(n)) {
+    toast('该步骤尚未解锁', true); return
+  }
+  SL.currentStep = n; SL.queue = []; SL.qIdx = 0; SL.skipped = new Set()
+  SL.q4a = []; SL.q4aIdx = 0; SL.q4b = []; SL.q4bIdx = 0; SL.inStep4a = true
+  SL.coinsThisStep = 0; SL.stepProgress = {}
+  drawSchemeLearn()
+}
+
+function drawSLStepBody() {
+  const body = el('step-body')
+  const s = SL.currentStep
+  if (s === 1) drawSLStep1(body)
+  else if (s === 2) drawSLStep2(body)
+  else if (s === 3) drawSLStep3(body)
+  else if (s === 4) drawSLStep4(body)
+}
+
+/* ─── Step 1: 单词熟悉 ─── */
+async function drawSLStep1(body) {
+  body.innerHTML = `<div class="card"><div class="muted center">加载单词中…</div></div>`
+  const r = await api(`/scheme/learn/${SL.courseId}/words`)
+  if (!r.ok) { body.innerHTML = `<div class="card empty">${esc(r.data.error || '加载失败')}</div>`; return }
+  const ws = r.data.words || []
+  SL.words = ws
+  body.innerHTML = `<div class="card">
+    <div class="spread">
+      <h3>Step 1 · 单词熟悉</h3>
+      <button class="btn ghost sm" onclick="SLGoStep(0);drawSchemeLearn()">返回步骤</button>
+    </div>
+    <p class="muted">全文共 ${ws.length} 个单词 · 点击 🔊 听发音 · 熟悉音/形/义后再进入下一句</p>
+    <div class="wm-grid" style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px">
+      ${ws.map(w => `<div class="wm-card" style="padding:10px;border:1px solid var(--line);border-radius:8px;cursor:pointer" onclick="playYoudao('${esc(w.word)}')">
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="font-weight:600;font-size:15px">${esc(w.word)}</span>
+          <span class="muted" style="font-size:12px">🔊</span>
+        </div>
+        ${w.phonetic ? `<div style="font-size:12px;color:var(--accent);margin-top:2px">${esc(w.phonetic)}</div>` : ''}
+        ${w.meaning ? `<div style="font-size:13px;margin-top:2px">${esc(w.meaning)}</div>` : '<div class="muted" style="font-size:12px">未设置释义</div>'}
+      </div>`).join('')}
+    </div>
+    <button class="btn block" style="margin-top:16px" onclick="finishSLStep(1)">完成 Step 1 →</button>
+  </div>`
+}
+
+/* ─── Step 2: 句子理解 ─── */
+function drawSLStep2(body) {
+  const total = SL.sentences.length
+  if (!SL.qIdx || SL.qIdx >= total) { SL.qIdx = 0 }
+  const s = SL.sentences[SL.qIdx]
+  if (!s) { finishSLStepView(body, 2); return }
+  const isLast = SL.qIdx + 1 >= total
+  body.innerHTML = `<div class="card">
+    <div class="spread"><span class="muted">第 ${SL.qIdx + 1}/${total} 句</span>
+      <button class="btn ghost sm" onclick="SLGoStep(0);drawSchemeLearn()">返回步骤</button>
+    </div>
+    <div class="cn" style="font-size:18px;margin:12px 0">${esc(s.chinese)}</div>
+    <div class="sentence" style="font-size:20px;margin:12px 0">${esc(s.english)}</div>
+    ${s.audio_url ? `<button class="btn ghost sm" style="margin-top:6px" onclick="playAudio('${esc(s.audio_url)}', 1, this)">🔊 播放音频</button>` : '<span class="muted">无音频</span>'}
+    <p class="muted" style="margin-top:10px;font-size:13px">学习要求：仔细看英文、听音频、理解中文。把句子的音、形、义链接上。</p>
+    <div class="row" style="margin-top:12px">
+      ${SL.qIdx > 0 ? `<button class="btn ghost" style="flex:1" onclick="SL.qIdx--;drawSLStep2(el('step-body'))">← 上一句</button>` : '<span style="flex:1"></span>'}
+      <button class="btn" style="flex:1" onclick="SL.qIdx++;${isLast ? `finishSLStepView(el('step-body'),2)` : `drawSLStep2(el('step-body'))`}">${isLast ? '完成浏览 →' : '下一句 →'}</button>
+    </div>
+  </div>`
+}
+
+/* ─── Step 3: 辅助听写 ─── */
+async function drawSLStep3(body) {
+  setLeaveGuard(() => '当前练习尚未完成，离开后将不保留进度，确定要离开吗？')
+  const progress = await api(`/scheme/step/progress?course_id=${SL.courseId}&question_type=step3`)
+  if (progress.ok) SL.stepProgress = {}
+  if (progress.ok) (progress.data.progress || []).forEach(p => { SL.stepProgress[p.sentence_id] = p })
+
+  // 初始化队列：排除已完成（ever_correct）且未跳过的，打乱
+  const done = new Set()
+  Object.entries(SL.stepProgress).forEach(([sid, p]) => { if (p.ever_correct && !p.skipped) done.add(Number(sid)) })
+  // 检查是否全部完成
+  const allDone = SL.sentences.every(s => done.has(s.id))
+  if (allDone) { SL.qIdx = SL.sentences.length; finishSLStepView(body, 3); return }
+
+  SL.queue = shuffle(SL.sentences.filter(s => !done.has(s.id)))
+  SL.qIdx = 0; SL.skipped = new Set(); SL.coinsThisStep = 0
+  drawSLStep3Q(body)
+}
+
+function drawSLStep3Q(body) {
+  if (SL.qIdx >= SL.queue.length) {
+    // 检查是否还有跳过的
+    if (SL.skipped.size > 0) {
+      SL.queue = SL.queue.filter((_, i) => SL.skipped.has(i))
+      SL.qIdx = 0; SL.skipped = new Set()
+      body.innerHTML = `<div class="card center">
+        <h3>还有 ${SL.queue.length} 题跳过未答</h3>
+        <p class="muted">请继续完成所有题目</p>
+        <button class="btn block" style="margin-top:12px" onclick="drawSLStep3Q(el('step-body'))">继续 →</button>
+      </div>`
+      return
+    }
+    finishSLStepView(body, 3)
+    return
+  }
+  const s = SL.queue[SL.qIdx]
+  const ec = SL.errorCount['3'] || 0
+  const fallbackWarn = ec >= SL.maxErrors
+    ? `<div class="card" style="border:1px solid #e67e22;background:#fff8f0;margin-bottom:8px">
+        <b>⚠️ 错误次数已达 ${ec}/${SL.maxErrors}</b>，可回退到上一步重新巩固
+        <button class="btn ghost sm" style="margin-left:8px" onclick="slFallback(3)">← 回退到 Step 2</button></div>` : ''
+
+  body.innerHTML = `${fallbackWarn}
+    <div class="card">
+      <div class="spread"><span class="muted">第 ${SL.qIdx + 1}/${SL.queue.length} 题</span>
+        <span class="muted">错误: ${ec}/${SL.maxErrors}</span>
+      </div>
+      <div class="cn" style="font-size:18px;margin:12px 0">${esc(s.chinese)}</div>
+      ${s.audio_url ? `<button class="btn ghost sm" style="margin-bottom:8px" onclick="playAudio('${esc(s.audio_url)}', 1, this)">🔊 播放音频</button>` : '<span class="muted">无音频</span>'}
+      <div class="muted" style="font-size:13px;margin-bottom:6px">根据中文释义和发音，写出对应的英文句子</div>
+      <textarea id="sl_input" rows="3" placeholder="写出英文…" style="width:100%"></textarea>
+      <div id="sl_fb" style="margin-top:8px"></div>
+      <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
+        <button class="btn" onclick="slSubmit3()">提交</button>
+        <button class="btn ghost sm" onclick="slSkip3()">跳过 →</button>
+        <button class="btn ghost sm" style="color:#e74c3c" onclick="slAppeal(${s.id},'step3')">⚖️ 复议</button>
+      </div>
+    </div>`
+}
+
+async function slSubmit3() {
+  const input = el('sl_input').value.trim()
+  if (!input) { toast('请输入英文'); return }
+  const s = SL.queue[SL.qIdx]
+  const r = await api('/scheme/step/submit', 'POST', {
+    course_id: SL.courseId, sentence_id: s.id,
+    question_type: 'step3', user_input: input,
+  })
+  if (!r.ok) { toast(r.data.error || '提交失败', true); return }
+  const d = r.data
+  if (d.coins_earned > 0) {
+    SL.coinsThisStep += d.coins_earned
+    setBalance(d.balance)
+    toast(`+${d.coins_earned} 金币！`, false)
+  }
+  // 更新错误计数
+  if (!d.correct) SL.errorCount['3'] = (SL.errorCount['3'] || 0) + 1
+  else SL.errorCount['3'] = Math.max(0, (SL.errorCount['3'] || 0) - 1)
+
+  if (d.correct) {
+    el('sl_fb').innerHTML = `<div class="feedback correct">✅ 正确！${d.coins_earned > 0 ? ' +' + d.coins_earned + ' 金币' : ''}</div>
+      <button class="btn block" style="margin-top:8px" onclick="slNext3()">下一题 →</button>`
+  } else {
+    // 不显示正确答案！
+    el('sl_fb').innerHTML = `<div class="feedback retry">❌ 回答不正确，请修改后重试（不提示正确答案）</div>`
+    // 重新获取焦点
+    setTimeout(() => { const inp = el('sl_input'); if (inp) inp.focus() }, 100)
+  }
+}
+
+function slSkip3() {
+  const s = SL.queue[SL.qIdx]
+  SL.skipped.add(SL.qIdx)
+  api('/scheme/step/skip', 'POST', {
+    course_id: SL.courseId, sentence_id: s.id, question_type: 'step3',
+  })
+  SL.qIdx++
+  drawSLStep3Q(el('step-body'))
+}
+
+function slNext3() {
+  SL.qIdx++
+  drawSLStep3Q(el('step-body'))
+}
+
+/* ─── Step 4: 纯听写 + 翻译 ─── */
+async function drawSLStep4(body) {
+  setLeaveGuard(() => '当前练习尚未完成，离开后将不保留进度，确定要离开吗？')
+  const [pa, pb] = await Promise.all([
+    api(`/scheme/step/progress?course_id=${SL.courseId}&question_type=step4_dictation`),
+    api(`/scheme/step/progress?course_id=${SL.courseId}&question_type=step4_translation`),
+  ])
+  const done4a = new Set()
+  const done4b = new Set()
+  if (pa.ok) (pa.data.progress || []).forEach(p => { if (p.ever_correct && !p.skipped) done4a.add(p.sentence_id) })
+  if (pb.ok) (pb.data.progress || []).forEach(p => { if (p.ever_correct && !p.skipped) done4b.add(p.sentence_id) })
+
+  const allDone = SL.sentences.every(s => done4a.has(s.id)) &&
+                  SL.sentences.every(s => done4b.has(s.id))
+  // Also check if all in current step done
+  if (allDone) { SL.qIdx = SL.sentences.length; finishSLStepView(body, 4); return }
+
+  const remaining4a = SL.sentences.filter(s => !done4a.has(s.id))
+  const remaining4b = SL.sentences.filter(s => !done4b.has(s.id))
+  SL.q4a = shuffle(remaining4a); SL.q4aIdx = 0
+  SL.q4b = shuffle(remaining4b); SL.q4bIdx = 0
+  SL.inStep4a = true; SL.skipped = new Set(); SL.coinsThisStep = 0
+  body.innerHTML = `<div class="card center">
+    <h3>Step 4 · 纯听写 + 翻译</h3>
+    <p class="muted">两个独立题目，分别提交：<br/>A) 听音写英文 &nbsp; B) 翻译成中文</p>
+    <p class="muted">每题首次答对 +2 金币，二次答对 +1 金币</p>
+    ${SL.q4a.length > 0 ? `<button class="btn block" style="margin-top:12px" onclick="drawSLStep4A(el('step-body'))">开始听写</button>` : ''}
+    ${SL.q4b.length > 0 ? `<button class="btn block" style="margin-top:8px" onclick="SL.inStep4a=false;drawSLStep4B(el('step-body'))">开始翻译</button>` : ''}
+    ${SL.q4a.length === 0 && SL.q4b.length === 0 ? `<button class="btn block" style="margin-top:12px" onclick="finishSLStepView(el('step-body'),4)">完成 Step 4 →</button>` : ''}
+  </div>`
+}
+
+/* Step 4-A: 听写 */
+function drawSLStep4A(body) {
+  if (SL.q4aIdx >= SL.q4a.length) {
+    if (SL.skipped.size > 0) {
+      SL.q4a = SL.q4a.filter((_, i) => SL.skipped.has(i))
+      SL.q4aIdx = 0; SL.skipped = new Set()
+    } else {
+      SL.inStep4a = false; drawSLStep4(body); return
+    }
+  }
+  const s = SL.q4a[SL.q4aIdx]
+  const ec = SL.errorCount['4'] || 0
+  const fallbackWarn = ec >= SL.maxErrors
+    ? `<div class="card" style="border:1px solid #e67e22;background:#fff8f0;margin-bottom:8px">
+        <b>⚠️ 错误次数已达 ${ec}/${SL.maxErrors}</b>
+        <button class="btn ghost sm" style="margin-left:8px" onclick="slFallback(4)">← 回退到 Step 3</button></div>` : ''
+
+  body.innerHTML = `${fallbackWarn}
+    <div class="card">
+      <div class="spread"><span class="muted">听写 ${SL.q4aIdx + 1}/${SL.q4a.length}</span>
+        <span class="muted">错误: ${ec}/${SL.maxErrors}</span>
+      </div>
+      ${s.audio_url ? `<button class="btn ghost sm" style="margin:8px 0" onclick="playAudio('${esc(s.audio_url)}', 1, this)">🔊 播放音频</button>` : '<span class="muted">无音频</span>'}
+      <div class="muted" style="font-size:13px;margin-bottom:6px">听音频写出英文句子（没有中文提示）</div>
+      <textarea id="sl4a_input" rows="3" placeholder="写出英文…" style="width:100%"></textarea>
+      <div id="sl4a_fb" style="margin-top:8px"></div>
+      <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
+        <button class="btn" onclick="slSubmit4A()">提交</button>
+        <button class="btn ghost sm" onclick="slSkip4A()">跳过 →</button>
+        <button class="btn ghost sm" style="color:#e74c3c" onclick="slAppeal(${s.id},'step4_dictation')">⚖️ 复议</button>
+      </div>
+    </div>`
+}
+
+async function slSubmit4A() {
+  const input = el('sl4a_input').value.trim()
+  if (!input) { toast('请输入英文'); return }
+  const s = SL.q4a[SL.q4aIdx]
+  const r = await api('/scheme/step/submit', 'POST', {
+    course_id: SL.courseId, sentence_id: s.id,
+    question_type: 'step4_dictation', user_input: input,
+  })
+  if (!r.ok) { toast(r.data.error || '提交失败', true); return }
+  const d = r.data
+  if (d.coins_earned > 0) { SL.coinsThisStep += d.coins_earned; setBalance(d.balance); toast(`+${d.coins_earned} 金币！`) }
+  if (!d.correct) SL.errorCount['4'] = (SL.errorCount['4'] || 0) + 1
+  else SL.errorCount['4'] = Math.max(0, (SL.errorCount['4'] || 0) - 1)
+
+  if (d.correct) {
+    el('sl4a_fb').innerHTML = `<div class="feedback correct">✅ 正确！${d.coins_earned > 0 ? ' +' + d.coins_earned + ' 金币' : ''}</div>
+      <button class="btn block" style="margin-top:8px" onclick="slNext4A()">下一题 →</button>`
+  } else {
+    el('sl4a_fb').innerHTML = `<div class="feedback retry">❌ 不正确，请修改后重试</div>`
+    setTimeout(() => { const inp = el('sl4a_input'); if (inp) inp.focus() }, 100)
+  }
+}
+
+function slSkip4A() { SL.skipped.add(SL.q4aIdx); SL.q4aIdx++; drawSLStep4A(el('step-body')) }
+function slNext4A() { SL.q4aIdx++; drawSLStep4A(el('step-body')) }
+
+/* Step 4-B: 翻译 */
+function drawSLStep4B(body) {
+  if (SL.q4bIdx >= SL.q4b.length) {
+    if (SL.skipped.size > 0) {
+      SL.q4b = SL.q4b.filter((_, i) => SL.skipped.has(i))
+      SL.q4bIdx = 0; SL.skipped = new Set()
+    } else {
+      SL.inStep4a = true; drawSLStep4(body); return
+    }
+  }
+  const s = SL.q4b[SL.q4bIdx]
+  body.innerHTML = `<div class="card">
+    <div class="spread"><span class="muted">翻译 ${SL.q4bIdx + 1}/${SL.q4b.length}</span></div>
+    <div class="sentence" style="font-size:18px;margin:12px 0">${esc(s.english)}</div>
+    <div class="muted" style="font-size:13px;margin-bottom:6px">将上面英文翻译成中文</div>
+    <textarea id="sl4b_input" rows="3" placeholder="写出中文翻译…" style="width:100%"></textarea>
+    <div id="sl4b_fb" style="margin-top:8px"></div>
+    <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
+      <button class="btn" onclick="slSubmit4B()">提交</button>
+      <button class="btn ghost sm" onclick="slSkip4B()">跳过 →</button>
+      <button class="btn ghost sm" style="color:#e74c3c" onclick="slAppeal(${s.id},'step4_translation')">⚖️ 复议</button>
+    </div>
+  </div>`
+}
+
+async function slSubmit4B() {
+  const input = el('sl4b_input').value.trim()
+  if (!input) { toast('请输入中文翻译'); return }
+  const s = SL.q4b[SL.q4bIdx]
+  const r = await api('/scheme/step/submit', 'POST', {
+    course_id: SL.courseId, sentence_id: s.id,
+    question_type: 'step4_translation', user_input: input,
+  })
+  if (!r.ok) { toast(r.data.error || '提交失败', true); return }
+  const d = r.data
+  if (d.coins_earned > 0) { SL.coinsThisStep += d.coins_earned; setBalance(d.balance); toast(`+${d.coins_earned} 金币！`) }
+  if (!d.correct) SL.errorCount['4'] = (SL.errorCount['4'] || 0) + 1
+  else SL.errorCount['4'] = Math.max(0, (SL.errorCount['4'] || 0) - 1)
+
+  if (d.correct) {
+    el('sl4b_fb').innerHTML = `<div class="feedback correct">✅ 正确！${d.coins_earned > 0 ? ' +' + d.coins_earned + ' 金币' : ''}</div>
+      <button class="btn block" style="margin-top:8px" onclick="slNext4B()">下一题 →</button>`
+  } else {
+    el('sl4b_fb').innerHTML = `<div class="feedback retry">❌ 不正确，请修改后重试</div>`
+    setTimeout(() => { const inp = el('sl4b_input'); if (inp) inp.focus() }, 100)
+  }
+}
+
+function slSkip4B() { SL.skipped.add(SL.q4bIdx); SL.q4bIdx++; drawSLStep4B(el('step-body')) }
+function slNext4B() { SL.q4bIdx++; drawSLStep4B(el('step-body')) }
+
+/* ─── 回退 ─── */
+async function slFallback(fromStep) {
+  const ok = await modalConfirm(
+    `确定回退到 Step ${fromStep - 1} 重新巩固吗？回退后需等待 ${SL.cooldown} 分钟冷却才能再次进入 Step ${fromStep}。`,
+    '确定回退', '取消')
+  if (!ok) return
+  const r = await api('/scheme/step/fallback', 'POST', {
+    course_id: SL.courseId, from_step: fromStep,
+  })
+  if (!r.ok) { toast(r.data.error || '回退失败', true); return }
+  toast(r.data.message || '已回退')
+  SL.currentStep = r.data.fallback_to
+  SL.queue = []; SL.qIdx = 0
+  SL.completedSteps = SL.completedSteps.filter(s => s !== r.data.fallback_to)
+  // 延迟2秒后刷新
+  setTimeout(() => {
+    nav('#/scheme/learn/' + SL.courseId)
+  }, 500)
+}
+
+/* ─── 人工复议 ─── */
+async function slAppeal(sentenceId, questionType) {
+  const inputMap = { step3: 'sl_input', step4_dictation: 'sl4a_input', step4_translation: 'sl4b_input' }
+  const inp = el(inputMap[questionType])
+  const userInput = inp ? inp.value.trim() : ''
+  if (!userInput) { toast('请先输入答案再申请复议'); return }
+  const s = (SL.queue[SL.qIdx] || SL.q4a[SL.q4aIdx] || SL.q4b[SL.q4bIdx] || {})
+  const ok = await modalConfirm(
+    `申请人工复议将花费 2 金币。如果管理员判定你正确，金币会返还并补发奖励。确定申请吗？`,
+    '确定复议（2 金币）', '取消')
+  if (!ok) return
+  const r = await api('/scheme/step/appeal', 'POST', {
+    course_id: SL.courseId, sentence_id: sentenceId,
+    question_type: questionType, user_input: userInput,
+    standard_answer: s.english || s.chinese || '',
+  })
+  if (!r.ok) { toast(r.data.error || '申请失败', true); return }
+  setBalance(r.data.balance)
+  toast(r.data.message || '已申请')
+  // 视为通过，让用户继续
+  if (questionType === 'step3') slNext3()
+  else if (questionType === 'step4_dictation') slNext4A()
+  else slNext4B()
+}
+
+/* ─── 完成步骤 ─── */
+function finishSLStepView(body, step) {
+  clearLeaveGuard()
+  const total = (step === 4 ? SL.q4a.length + SL.q4b.length : (step === 3 ? SL.sentences.length : 0))
+  body.innerHTML = `<div class="card center">
+    <h3>Step ${step} 完成</h3>
+    ${step >= 3 ? `<p>本步获得 🪙 ${SL.coinsThisStep} 金币</p>` : ''}
+    <p class="muted">可以进入下一步，也可以继续巩固</p>
+    <div class="row" style="margin-top:12px;justify-content:center;flex-wrap:wrap;gap:8px">
+      <button class="btn ghost" onclick="SLGoStep(0);drawSchemeLearn()">返回步骤</button>
+      <button class="btn" onclick="finishSLStep(${step})">${step < 4 ? '解锁下一步 →' : '完成课程 →'}</button>
+    </div>
+  </div>`
+}
+
+async function finishSLStep(step) {
+  clearLeaveGuard()
+  const r = await api('/scheme/step/finish', 'POST', {
+    course_id: SL.courseId, step: step,
+  })
+  if (!r.ok) { toast(r.data.error || '提交失败', true); return }
+  const d = r.data
+  SL.completedSteps = d.completed_steps || SL.completedSteps
+  if (d.next_step) {
+    SL.stepUnlocks[String(d.next_step)] = true
+  }
+  if (d.next_course) {
+    toast(`🎉 课程完成！下一门课程已解锁`)
+  }
+  // 刷新页面
+  setTimeout(() => {
+    if (d.is_course_completed) nav('#/scheme')
+    else nav('#/scheme/learn/' + SL.courseId)
+  }, 300)
 }

@@ -118,6 +118,7 @@ input:focus, textarea:focus { border-color: var(--primary); }
   margin-top: 12px; border-radius: 12px; padding: 12px 14px; font-size: 15px;
 }
 .feedback.ok { background: rgba(62,207,142,.12); border: 1px solid var(--ok); }
+.feedback.correct { background: rgba(62,207,142,.12); border: 1px solid var(--ok); color: var(--ok); }
 .feedback.retry { background: rgba(255,180,84,.12); border: 1px solid var(--warn); }
 
 .big-checkin {
@@ -299,6 +300,7 @@ table.tbl td.ops .btn { margin: 2px 2px; }
 .entry-a { border-top: 3px solid var(--primary); }
 .entry-b { border-top: 3px solid var(--accent); }
 .entry-c { border-top: 3px solid var(--ok); }
+.entry-d { border-top: 3px solid #8b5cf6; }
 .entry-icon { font-size: 34px; line-height: 1.1; }
 .entry-title { font-size: 18px; font-weight: 700; }
 .entry-desc { font-size: 13px; color: var(--text-dim); flex: 1; }

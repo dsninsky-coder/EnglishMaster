@@ -307,6 +307,10 @@ function route() {
   // 学生
   if (parts[0] === 'admin') return renderHome()
   if (parts[0] === 'listen') return renderListenHome()
+  if (parts[0] === 'scheme') {
+    if (parts[1] === 'learn' && parts[2]) return renderSchemeLearn(parts[2])
+    return renderSchemeHome()
+  }
   if (parts[0] === 'rewards') return renderRewards()
   if (parts[0] === 'learn' && parts[1]) return renderLearn(parts[1])
   if (parts[0] === 'settings') return renderSettings()
