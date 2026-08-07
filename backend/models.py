@@ -304,6 +304,7 @@ class SchemeAssignment(db.Model):
     step_error_counts = db.Column(db.JSON, default=dict)   # {"3":5,"4":2}
     step_entered_at = db.Column(db.JSON, default=dict)     # {"3":"2026-08-06T10:00:00"}
     step_fallen_back = db.Column(db.JSON, default=dict)    # {"3":true}
+    step_locked = db.Column(db.JSON, default=dict)          # {"2":"2026-08-07T10:00:00"} 步骤锁定时间
     appeal_locked = db.Column(db.Boolean, default=False)
     appeal_suppressed = db.Column(db.JSON, default=list)
     appeal_suppressed_perfect = db.Column(db.JSON, default=dict)

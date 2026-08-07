@@ -53,7 +53,7 @@ DEFAULT_SETTINGS = {
 }
 
 # ================= 系统版本与升级内容（登录页展示 / 数据兼容性参考） =================
-VERSION = 'v1.4.1'
+VERSION = 'v1.4.2'
 # 每个版本是否影响老数据：全部为非破坏性（仅新增列 / 受控数据重映射），无清库操作。
 # 详见 README「数据兼容性」一节；迁移前 init_db.py 会自动备份数据库。
 CHANGELOG = [
@@ -3069,6 +3069,31 @@ def _check_cooldown(assignment, target_step):
     return None
 
 
+def _check_step_lock(assignment, step):
+    """检查某步骤是否处于锁定状态及剩余冷却时间。
+    返回 (is_locked, cooldown_msg) 元组。"""
+    scheme = CourseScheme.query.get(assignment.scheme_id)
+    if not scheme:
+        return (False, None)
+    locked = assignment.step_locked or {}
+    locked_at = locked.get(str(step))
+    if not locked_at:
+        return (False, None)
+    try:
+        t = datetime.datetime.fromisoformat(locked_at)
+    except Exception:
+        return (False, None)
+    delta = (datetime.datetime.utcnow() - t).total_seconds() / 60.0
+    if delta < scheme.cooldown_minutes:
+        w = int(scheme.cooldown_minutes - delta + 1)
+        return (True, f'冷却中，还需等待约 {w} 分钟才能进入（防止刷答案）')
+    # 冷却已过，自动解除锁定
+    locked.pop(str(step), None)
+    assignment.step_locked = locked
+    db.session.commit()
+    return (False, None)
+
+
 @app.route('/api/v1/scheme/my', methods=['GET'])
 @jwt_required()
 def scheme_my_courses():
@@ -3133,6 +3158,12 @@ def scheme_learn_state(course_id):
     sent_count = len(sentences)
     # 回退冷却检查
     cooldown_msg = _check_cooldown(asm, asm.current_step)
+    # 步骤锁定检查（Step2锁定机制）
+    step_locked_info = {}
+    for s in enabled_steps:
+        is_locked, lock_msg = _check_step_lock(asm, s)
+        if is_locked:
+            step_locked_info[str(s)] = lock_msg
     return jsonify(
         scheme_id=asm.scheme_id,
         course_id=course_id,
@@ -3148,6 +3179,7 @@ def scheme_learn_state(course_id):
         cooldown_minutes=scheme.cooldown_minutes,
         cooldown_msg=cooldown_msg,
         appeal_locked=asm.appeal_locked,
+        step_locked=step_locked_info,
     )
 
 
@@ -3412,9 +3444,19 @@ def scheme_step_finish():
         entered = dict(asm.step_entered_at or {})
         entered[str(next_step)] = datetime.datetime.utcnow().isoformat()
         asm.step_entered_at = entered
+        # Step 2 特殊性：完成 Step 2 后锁定它（防止看答案）
+        if step == 2:
+            locked = dict(asm.step_locked or {})
+            locked['2'] = datetime.datetime.utcnow().isoformat()
+            asm.step_locked = locked
     else:
         # 所有步骤完成
         asm.is_completed = True
+        # Step 2 完成也要锁定（即使没下一步）
+        if step == 2:
+            locked = dict(asm.step_locked or {})
+            locked['2'] = datetime.datetime.utcnow().isoformat()
+            asm.step_locked = locked
 
     # 清除本步错误计数
     ec = dict(asm.step_error_counts or {})
@@ -3440,6 +3482,43 @@ def scheme_step_finish():
         is_course_completed=asm.is_completed,
         completed_steps=completed,
     )
+
+
+@app.route('/api/v1/scheme/step/auto-lock', methods=['POST'])
+@jwt_required()
+def scheme_step_auto_lock():
+    """Step 2 自动锁定：当后续步骤已解锁且用户离开 Step 2 时，锁定 Step 2。"""
+    u = current_user()
+    data = request.get_json(silent=True) or {}
+    course_id = int(data.get('course_id', 0))
+
+    asm = _get_scheme_assignment(u.id, course_id)
+    if not asm:
+        return jsonify(error='未分配该课程'), 404
+
+    # 检查条件：Step 2 已完成 且 后续步骤已解锁
+    completed = asm.completed_steps or []
+    if 2 not in completed:
+        return jsonify(locked=False, reason='Step 2 未完成，无需锁定')
+
+    unlocks = asm.step_unlocks or {}
+    has_next_unlocked = any(
+        unlocks.get(str(s)) for s in [3, 4]
+    )
+    if not has_next_unlocked:
+        return jsonify(locked=False, reason='后续步骤未解锁，无需锁定')
+
+    # 检查是否已锁定
+    locked = dict(asm.step_locked or {})
+    if locked.get('2'):
+        return jsonify(locked=True, message='已锁定')
+
+    # 锁定 Step 2
+    locked['2'] = datetime.datetime.utcnow().isoformat()
+    asm.step_locked = locked
+    db.session.commit()
+
+    return jsonify(locked=True, message='Step 2 已锁定')
 
 
 @app.route('/api/v1/scheme/step/fallback', methods=['POST'])
@@ -3500,6 +3579,11 @@ def scheme_step_fallback():
     # 清除上一步的完成记录（需重新巩固）
     completed = [s for s in (asm.completed_steps or []) if s != prev_step]
     asm.completed_steps = completed
+
+    # 如果回退目标步骤曾被锁定，清除锁定（回退意味着允许重新学习）
+    locked = dict(asm.step_locked or {})
+    locked.pop(str(prev_step), None)
+    asm.step_locked = locked
 
     db.session.commit()
 

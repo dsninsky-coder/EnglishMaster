@@ -1303,6 +1303,7 @@ async function renderSchemeLearn(courseId) {
     completedSteps: sd.completed_steps || [],
     stepUnlocks: sd.step_unlocks || {},
     errorCount: sd.error_counts || {},
+    stepLocked: sd.step_locked || {},
     coinsThisStep: 0, queue: [], qIdx: 0, skipped: new Set(),
     words: [], stepProgress: {},
     q4a: [], q4aIdx: 0, q4b: [], q4bIdx: 0, inStep4a: true,
@@ -1316,16 +1317,18 @@ function drawSchemeLearn() {
   const enabled = SL.enabledSteps
   const stepsHtml = [1, 2, 3, 4].map(n => {
     if (!enabled.includes(n)) return ''
-    const locked = !SL.stepUnlocks[String(n)] && n > 1 && !SL.completedSteps.includes(n)
+    const stepLockedMsg = SL.stepLocked[String(n)]
+    const hardLocked = !!stepLockedMsg || !SL.stepUnlocks[String(n)] && n > 1 && !SL.completedSteps.includes(n)
     const done = SL.completedSteps.includes(n)
     const active = SL.currentStep === n
     let cls = ''
-    if (active) cls = 'active'
+    if (active && !hardLocked) cls = 'active'
     else if (done) cls = 'done'
-    else if (locked) cls = 'locked'
+    else if (hardLocked) cls = 'locked'
     const names = {1:'单词熟悉',2:'句子理解',3:'辅助听写',4:'纯听写+翻译'}
-    const icon = locked ? '🔒 ' : (done ? '✅ ' : '')
-    return `<div class="step-pill ${cls}" ${locked ? '' : `onclick="SLGoStep(${n})"`}>${icon}Step ${n} · ${names[n]}</div>`
+    const icon = hardLocked ? '🔒 ' : (done ? '✅ ' : '')
+    const lockTip = stepLockedMsg ? ` title="${esc(stepLockedMsg)}"` : ''
+    return `<div class="step-pill ${cls}"${lockTip} ${hardLocked ? '' : `onclick="SLGoStep(${n})"`}>${icon}Step ${n} · ${names[n]}</div>`
   }).filter(Boolean).join('')
 
   el('app').innerHTML = studentFrame(`
@@ -1345,6 +1348,8 @@ function SLGoStep(n) {
   if (n > 1 && !SL.stepUnlocks[String(n)] && !SL.completedSteps.includes(n)) {
     toast('该步骤尚未解锁', true); return
   }
+  // 离开当前步骤时清除离开守卫
+  clearLeaveGuard()
   SL.currentStep = n; SL.queue = []; SL.qIdx = 0; SL.skipped = new Set()
   SL.q4a = []; SL.q4aIdx = 0; SL.q4b = []; SL.q4bIdx = 0; SL.inStep4a = true
   SL.coinsThisStep = 0; SL.stepProgress = {}
@@ -1390,6 +1395,31 @@ async function drawSLStep1(body) {
 
 /* ─── Step 2: 句子理解 ─── */
 function drawSLStep2(body) {
+  // 检查 Step 2 是否被锁定
+  if (SL.stepLocked['2']) {
+    body.innerHTML = `<div class="card center" style="max-width:480px;margin:0 auto">
+      <h3>🔒 Step 2 已锁定</h3>
+      <div style="background:var(--bg2,#f8d7da);border:1px solid #e74c3c;border-radius:8px;padding:14px;margin:16px 0;text-align:left;line-height:1.7">
+        <p style="margin:0">${esc(SL.stepLocked['2'])}</p>
+        <p style="margin:8px 0 0;font-size:13px;color:var(--muted,#666)">
+          完成 Step 2 后，句子理解步骤被暂时锁住防止刷答案。请在后续步骤（听写/翻译）中认真练习。
+        </p>
+      </div>
+      <button class="btn ghost" onclick="SLGoStep(0);drawSchemeLearn()">← 返回步骤导航</button>
+    </div>`
+    return
+  }
+
+  // 如果后续步骤已解锁，设置离开自动锁定
+  const nextUnlocked = SL.stepUnlocks['3'] || SL.stepUnlocks['4']
+  if (nextUnlocked) {
+    setLeaveGuard(async () => {
+      // 离开时自动锁定 Step 2
+      await api('/scheme/step/auto-lock', 'POST', { course_id: SL.courseId })
+      return 'Step 2 已自动锁定。'
+    })
+  }
+
   const total = SL.sentences.length
   if (!SL.qIdx || SL.qIdx >= total) { SL.qIdx = 0 }
   const s = SL.sentences[SL.qIdx]
@@ -1706,6 +1736,11 @@ async function slAppeal(sentenceId, questionType) {
 /* ─── 完成步骤 ─── */
 function finishSLStepView(body, step) {
   clearLeaveGuard()
+  if (step === 2) {
+    // Step 2 特殊确认：提示锁定机制
+    finishSLStep2Confirm(body)
+    return
+  }
   const total = (step === 4 ? SL.q4a.length + SL.q4b.length : (step === 3 ? SL.sentences.length : 0))
   body.innerHTML = `<div class="card center">
     <h3>Step ${step} 完成</h3>
@@ -1714,6 +1749,23 @@ function finishSLStepView(body, step) {
     <div class="row" style="margin-top:12px;justify-content:center;flex-wrap:wrap;gap:8px">
       <button class="btn ghost" onclick="SLGoStep(0);drawSchemeLearn()">返回步骤</button>
       <button class="btn" onclick="finishSLStep(${step})">${step < 4 ? '解锁下一步 →' : '完成课程 →'}</button>
+    </div>
+  </div>`
+}
+
+function finishSLStep2Confirm(body) {
+  body.innerHTML = `<div class="card center" style="max-width:480px;margin:0 auto">
+    <h3>⚠️ Step 2 完成确认</h3>
+    <div style="background:var(--bg2, #fff3cd);border:1px solid #ffc107;border-radius:8px;padding:14px;margin:16px 0;text-align:left;line-height:1.7">
+      <p style="margin:0 0 8px">🔒 <b>结束本步骤后，Step 2 会暂时锁上。</b></p>
+      <p style="margin:0;font-size:13px;color:var(--muted, #666)">
+        锁定期间需要等待 <b>${SL.cooldown} 分钟</b> 冷却才能再次打开。<br>
+        请确认你已经认真学习了所有句子的中英文对照。
+      </p>
+    </div>
+    <div class="row" style="margin-top:12px;justify-content:center;flex-wrap:wrap;gap:8px">
+      <button class="btn ghost" onclick="SLGoStep(0);drawSchemeLearn()">← 返回继续学习</button>
+      <button class="btn" style="background:#e74c3c;color:#fff" onclick="finishSLStep(2)">🔒 确认解锁下一步</button>
     </div>
   </div>`
 }

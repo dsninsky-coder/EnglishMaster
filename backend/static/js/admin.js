@@ -428,7 +428,10 @@ async function openWordManager(courseId) {
       <button class="btn ghost sm" onclick="addWord(${courseId})">+ 添加</button></span>
     </div>
     <div id="wmList" class="wm-list" style="margin-top:8px">加载中…</div>
-    <div class="row" style="margin-top:12px"><button class="btn ghost" onclick="closeModal()">关闭</button></div>
+    <div class="row" style="margin-top:12px;gap:8px">
+      <button class="btn" onclick="saveAllWords(${courseId})">📝 保存全部</button>
+      <button class="btn ghost" onclick="closeModal()">关闭</button>
+    </div>
   </div>`)
   loadWordList(courseId)
 }
@@ -443,10 +446,12 @@ async function loadWordList(courseId) {
     <span class="wm-word" style="min-width:80px;font-weight:600">${esc(w.word)}</span>
     ${w.phonetic ? `<span class="tag phonetic" style="font-size:11px;cursor:pointer" title="点击发音" onclick="playYoudao('${esc(w.word)}')">🔊 ${esc(w.phonetic)}</span>` : '<span class="muted" style="font-size:11px">—</span>'}
     <input class="wm-meaning-inline" value="${esc(w.meaning || '')}" placeholder="释义"
-           style="width:100px;font-size:12px" id="wm-m-${w.id}" />
+           style="width:100px;font-size:12px" id="wm-m-${w.id}"
+           onkeydown="if(event.key==='Enter')saveWordInline(${courseId},${w.id})" />
     <input class="wm-phonetic-inline" value="${esc(w.phonetic || '')}" placeholder="音标"
-           style="width:100px;font-size:12px" id="wm-p-${w.id}" />
-    <button class="btn ghost sm" onclick="saveWordInline(${courseId}, ${w.id})">💾</button>
+           style="width:100px;font-size:12px" id="wm-p-${w.id}"
+           onkeydown="if(event.key==='Enter')saveWordInline(${courseId},${w.id})" />
+    <button class="btn sm" onclick="saveWordInline(${courseId}, ${w.id})" title="保存本条">💾 保存</button>
     ${w.is_custom ? '<span class="tag" style="font-size:11px">手动</span>' : ''}
     <button class="btn ghost sm" onclick="deleteWord(${courseId}, ${w.id}, '${esc(w.word)}')">删除</button>
     <button class="btn ghost sm" onclick="playYoudao('${esc(w.word)}')" title="发音">🔊</button>
@@ -458,6 +463,22 @@ async function saveWordInline(courseId, wordId) {
   const r = await api(`/admin/course/${courseId}/word/${wordId}`, 'PUT', { meaning, phonetic })
   if (!r.ok) { toast(r.data.error || '保存失败', true); return }
   toast('已保存')
+}
+async function saveAllWords(courseId) {
+  const rows = document.querySelectorAll('.wm-row')
+  let saved = 0, failed = 0
+  for (const row of rows) {
+    const mid = (row.querySelector('.wm-meaning-inline') || {}).id || ''
+    const pid = (row.querySelector('.wm-phonetic-inline') || {}).id || ''
+    const wordId = mid.replace('wm-m-', '') || pid.replace('wm-p-', '')
+    if (!wordId) continue
+    const meaning = (el('wm-m-' + wordId) || {}).value || ''
+    const phonetic = (el('wm-p-' + wordId) || {}).value || ''
+    const r = await api(`/admin/course/${courseId}/word/${wordId}`, 'PUT', { meaning, phonetic })
+    if (r.ok) saved++; else failed++
+  }
+  if (failed === 0) toast(`已保存 ${saved} 个单词`)
+  else toast(`保存 ${saved} 个，${failed} 个失败`, true)
 }
 async function extractWords(courseId) {
   const r = await api(`/admin/course/${courseId}/extract-words`, 'POST', {})

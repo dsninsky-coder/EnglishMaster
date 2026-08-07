@@ -317,6 +317,14 @@ def migrate():
         #       / scheme_assignments / scheme_step_progress
         # 由 db.create_all() 在建表阶段自动处理，无需额外 ALTER TABLE。
         # 但 old db 可能在 create_all 前就存在且无这些表 -> 靠 create_all 补齐。
+        # v1.4.2: scheme_assignments 增加 step_locked（步骤锁定时间）
+        sacols = [r[1] for r in db.session.execute(
+            text("PRAGMA table_info(scheme_assignments)")).fetchall()]
+        if 'step_locked' not in sacols:
+            db.session.execute(text(
+                "ALTER TABLE scheme_assignments ADD COLUMN step_locked JSON"))
+            db.session.commit()
+            print('[v1.4.2] 已为 scheme_assignments 增加 step_locked 列。')
         print('[v2.0] 听力大师迁移完成。')
 
 

@@ -103,7 +103,7 @@ function modalConfirm(message, okText, cancelText) {
 
 async function nav(hash) {
   if (_leaveGuard && typeof _leaveGuard === 'function') {
-    const msg = _leaveGuard()
+    const msg = await _leaveGuard()
     if (msg) {
       const cur = (location.hash.slice(1) || '/').split('/').filter(Boolean)
       const tgt = (hash.slice(1) || '/').split('/').filter(Boolean)
