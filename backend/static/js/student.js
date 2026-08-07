@@ -1306,7 +1306,7 @@ async function renderSchemeLearn(courseId) {
     stepLocked: sd.step_locked || {},
     coinsThisStep: 0, queue: [], qIdx: 0, skipped: new Set(),
     words: [], stepProgress: {},
-    q4a: [], q4aIdx: 0, q4b: [], q4bIdx: 0, inStep4a: true,
+    q4: [], q4Idx: 0, done4A: new Set(), done4B: new Set(), skipped4: new Set(),
     appealLocked: sd.appeal_locked || false,
   }
   drawSchemeLearn()
@@ -1351,7 +1351,7 @@ function SLGoStep(n) {
   // 离开当前步骤时清除离开守卫
   clearLeaveGuard()
   SL.currentStep = n; SL.queue = []; SL.qIdx = 0; SL.skipped = new Set()
-  SL.q4a = []; SL.q4aIdx = 0; SL.q4b = []; SL.q4bIdx = 0; SL.inStep4a = true
+  SL.q4 = []; SL.q4Idx = 0; SL.done4A = new Set(); SL.done4B = new Set(); SL.skipped4 = new Set()
   SL.coinsThisStep = 0; SL.stepProgress = {}
   drawSchemeLearn()
 }
@@ -1545,49 +1545,43 @@ function slNext3() {
   drawSLStep3Q(el('step-body'))
 }
 
-/* ─── Step 4: 纯听写 + 翻译 ─── */
+/* ─── Step 4: 纯听写 + 翻译（同一句子双框） ─── */
 async function drawSLStep4(body) {
   setLeaveGuard(() => '当前练习尚未完成，离开后将不保留进度，确定要离开吗？')
   const [pa, pb] = await Promise.all([
     api(`/scheme/step/progress?course_id=${SL.courseId}&question_type=step4_dictation`),
     api(`/scheme/step/progress?course_id=${SL.courseId}&question_type=step4_translation`),
   ])
-  const done4a = new Set()
-  const done4b = new Set()
-  if (pa.ok) (pa.data.progress || []).forEach(p => { if (p.ever_correct && !p.skipped) done4a.add(p.sentence_id) })
-  if (pb.ok) (pb.data.progress || []).forEach(p => { if (p.ever_correct && !p.skipped) done4b.add(p.sentence_id) })
+  SL.done4A = new Set()
+  SL.done4B = new Set()
+  if (pa.ok) (pa.data.progress || []).forEach(p => { if (p.ever_correct && !p.skipped) SL.done4A.add(p.sentence_id) })
+  if (pb.ok) (pb.data.progress || []).forEach(p => { if (p.ever_correct && !p.skipped) SL.done4B.add(p.sentence_id) })
 
-  const allDone = SL.sentences.every(s => done4a.has(s.id)) &&
-                  SL.sentences.every(s => done4b.has(s.id))
-  // Also check if all in current step done
-  if (allDone) { SL.qIdx = SL.sentences.length; finishSLStepView(body, 4); return }
-
-  const remaining4a = SL.sentences.filter(s => !done4a.has(s.id))
-  const remaining4b = SL.sentences.filter(s => !done4b.has(s.id))
-  SL.q4a = shuffle(remaining4a); SL.q4aIdx = 0
-  SL.q4b = shuffle(remaining4b); SL.q4bIdx = 0
-  SL.inStep4a = true; SL.skipped = new Set(); SL.coinsThisStep = 0
-  body.innerHTML = `<div class="card center">
-    <h3>Step 4 · 纯听写 + 翻译</h3>
-    <p class="muted">两个独立题目，分别提交：<br/>A) 听音写英文 &nbsp; B) 翻译成中文</p>
-    <p class="muted">每题首次答对 +2 金币，二次答对 +1 金币</p>
-    ${SL.q4a.length > 0 ? `<button class="btn block" style="margin-top:12px" onclick="drawSLStep4A(el('step-body'))">开始听写</button>` : ''}
-    ${SL.q4b.length > 0 ? `<button class="btn block" style="margin-top:8px" onclick="SL.inStep4a=false;drawSLStep4B(el('step-body'))">开始翻译</button>` : ''}
-    ${SL.q4a.length === 0 && SL.q4b.length === 0 ? `<button class="btn block" style="margin-top:12px" onclick="finishSLStepView(el('step-body'),4)">完成 Step 4 →</button>` : ''}
-  </div>`
+  // 构建队列：听写或翻译至少一项未完成的句子
+  const remaining = SL.sentences.filter(s => !SL.done4A.has(s.id) || !SL.done4B.has(s.id))
+  if (remaining.length === 0) {
+    SL.q4Idx = SL.sentences.length
+    finishSLStepView(body, 4); return
+  }
+  SL.q4 = shuffle(remaining)
+  SL.q4Idx = 0
+  SL.skipped4 = new Set()
+  SL.coinsThisStep = 0
+  drawSLStep4Q(body)
 }
 
-/* Step 4-A: 听写 */
-function drawSLStep4A(body) {
-  if (SL.q4aIdx >= SL.q4a.length) {
-    if (SL.skipped.size > 0) {
-      SL.q4a = SL.q4a.filter((_, i) => SL.skipped.has(i))
-      SL.q4aIdx = 0; SL.skipped = new Set()
+function drawSLStep4Q(body) {
+  if (SL.q4Idx >= SL.q4.length) {
+    if (SL.skipped4.size > 0) {
+      SL.q4 = SL.q4.filter((_, i) => SL.skipped4.has(i))
+      SL.q4Idx = 0; SL.skipped4 = new Set()
     } else {
-      SL.inStep4a = false; drawSLStep4(body); return
+      finishSLStepView(body, 4); return
     }
   }
-  const s = SL.q4a[SL.q4aIdx]
+  const s = SL.q4[SL.q4Idx]
+  const aDone = SL.done4A.has(s.id)
+  const bDone = SL.done4B.has(s.id)
   const ec = SL.errorCount['4'] || 0
   const fallbackWarn = ec >= SL.maxErrors
     ? `<div class="card" style="border:1px solid #e67e22;background:#fff8f0;margin-bottom:8px">
@@ -1596,25 +1590,56 @@ function drawSLStep4A(body) {
 
   body.innerHTML = `${fallbackWarn}
     <div class="card">
-      <div class="spread"><span class="muted">听写 ${SL.q4aIdx + 1}/${SL.q4a.length}</span>
+      <div class="spread">
+        <span class="muted">第 ${SL.q4Idx + 1}/${SL.q4.length} 句</span>
         <span class="muted">错误: ${ec}/${SL.maxErrors}</span>
       </div>
       ${s.audio_url ? `<button class="btn ghost sm" style="margin:8px 0" onclick="playAudio('${esc(s.audio_url)}', 1, this)">🔊 播放音频</button>` : '<span class="muted">无音频</span>'}
-      <div class="muted" style="font-size:13px;margin-bottom:6px">听音频写出英文句子（没有中文提示）</div>
-      <textarea id="sl4a_input" rows="3" placeholder="写出英文…" style="width:100%"></textarea>
-      <div id="sl4a_fb" style="margin-top:8px"></div>
-      <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
-        <button class="btn" onclick="slSubmit4A()">提交</button>
-        <button class="btn ghost sm" onclick="slSkip4A()">跳过 →</button>
-        <button class="btn ghost sm" style="color:#e74c3c" onclick="slAppeal(${s.id},'step4_dictation')">⚖️ 复议</button>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px" class="step4-grid">
+        <!-- A) 听写 -->
+        <div style="border:1px solid var(--line);border-radius:8px;padding:10px;${aDone ? 'opacity:0.65' : ''}">
+          <div class="spread">
+            <b>A) 听音写英文</b>
+            ${aDone ? '<span style="color:#27ae60;font-size:13px">✅ 已完成</span>' : ''}
+          </div>
+          <div class="muted" style="font-size:12px;margin:4px 0">听音频写出英文句子</div>
+          <textarea id="sl4a_input" rows="3" placeholder="写出英文…" style="width:100%;font-family:inherit" ${aDone ? 'disabled' : ''}></textarea>
+          <div id="sl4a_fb" style="margin-top:6px"></div>
+          ${!aDone ? `<div class="row" style="margin-top:6px;gap:6px">
+            <button class="btn sm" onclick="slSubmit4A()">提交听写</button>
+            <button class="btn ghost sm" style="color:#e74c3c" onclick="slAppeal(${s.id},'step4_dictation')">⚖️ 复议</button>
+          </div>` : ''}
+        </div>
+        <!-- B) 翻译 -->
+        <div style="border:1px solid var(--line);border-radius:8px;padding:10px;${bDone ? 'opacity:0.65' : ''}">
+          <div class="spread">
+            <b>B) 翻译成中文</b>
+            ${bDone ? '<span style="color:#27ae60;font-size:13px">✅ 已完成</span>' : ''}
+          </div>
+          <div class="sentence" style="font-size:16px;margin:6px 0">${esc(s.english)}</div>
+          <div class="muted" style="font-size:12px;margin:4px 0">将上面英文翻译成中文</div>
+          <textarea id="sl4b_input" rows="3" placeholder="写出中文翻译…" style="width:100%;font-family:inherit" ${bDone ? 'disabled' : ''}></textarea>
+          <div id="sl4b_fb" style="margin-top:6px"></div>
+          ${!bDone ? `<div class="row" style="margin-top:6px;gap:6px">
+            <button class="btn sm" onclick="slSubmit4B()">提交翻译</button>
+            <button class="btn ghost sm" style="color:#e74c3c" onclick="slAppeal(${s.id},'step4_translation')">⚖️ 复议</button>
+          </div>` : ''}
+        </div>
       </div>
+
+      <div class="row" style="margin-top:12px;flex-wrap:wrap;gap:8px;align-items:center">
+        <button class="btn ghost sm" onclick="slSkip4()">跳过本题 →</button>
+        ${aDone && bDone ? '<span style="color:#27ae60">✅ 本题全部完成</span>' : ''}
+      </div>
+      ${aDone && bDone ? `<button class="btn block" style="margin-top:8px" onclick="slNext4()">下一题 →</button>` : ''}
     </div>`
 }
 
 async function slSubmit4A() {
   const input = el('sl4a_input').value.trim()
   if (!input) { toast('请输入英文'); return }
-  const s = SL.q4a[SL.q4aIdx]
+  const s = SL.q4[SL.q4Idx]
   const r = await api('/scheme/step/submit', 'POST', {
     course_id: SL.courseId, sentence_id: s.id,
     question_type: 'step4_dictation', user_input: input,
@@ -1626,46 +1651,25 @@ async function slSubmit4A() {
   else SL.errorCount['4'] = Math.max(0, (SL.errorCount['4'] || 0) - 1)
 
   if (d.correct) {
-    el('sl4a_fb').innerHTML = `<div class="feedback correct">✅ 正确！${d.coins_earned > 0 ? ' +' + d.coins_earned + ' 金币' : ''}</div>
-      <button class="btn block" style="margin-top:8px" onclick="slNext4A()">下一题 →</button>`
+    SL.done4A.add(s.id)
+    el('sl4a_fb').innerHTML = `<div class="feedback correct">✅ 正确！${d.coins_earned > 0 ? ' +' + d.coins_earned + ' 金币' : ''}</div>`
+    // 锁定 A 框
+    const ta = el('sl4a_input'); if (ta) ta.disabled = true
+    el('sl4a_fb').parentElement.querySelectorAll('button').forEach(b => b.style.display = 'none')
+    // 如果 B 也完成了，自动进入下一题
+    if (SL.done4B.has(s.id)) {
+      setTimeout(() => slNext4(), 900)
+    }
   } else {
     el('sl4a_fb').innerHTML = `<div class="feedback retry">❌ 不正确，请修改后重试</div>`
     setTimeout(() => { const inp = el('sl4a_input'); if (inp) inp.focus() }, 100)
   }
 }
 
-function slSkip4A() { SL.skipped.add(SL.q4aIdx); SL.q4aIdx++; drawSLStep4A(el('step-body')) }
-function slNext4A() { SL.q4aIdx++; drawSLStep4A(el('step-body')) }
-
-/* Step 4-B: 翻译 */
-function drawSLStep4B(body) {
-  if (SL.q4bIdx >= SL.q4b.length) {
-    if (SL.skipped.size > 0) {
-      SL.q4b = SL.q4b.filter((_, i) => SL.skipped.has(i))
-      SL.q4bIdx = 0; SL.skipped = new Set()
-    } else {
-      SL.inStep4a = true; drawSLStep4(body); return
-    }
-  }
-  const s = SL.q4b[SL.q4bIdx]
-  body.innerHTML = `<div class="card">
-    <div class="spread"><span class="muted">翻译 ${SL.q4bIdx + 1}/${SL.q4b.length}</span></div>
-    <div class="sentence" style="font-size:18px;margin:12px 0">${esc(s.english)}</div>
-    <div class="muted" style="font-size:13px;margin-bottom:6px">将上面英文翻译成中文</div>
-    <textarea id="sl4b_input" rows="3" placeholder="写出中文翻译…" style="width:100%"></textarea>
-    <div id="sl4b_fb" style="margin-top:8px"></div>
-    <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
-      <button class="btn" onclick="slSubmit4B()">提交</button>
-      <button class="btn ghost sm" onclick="slSkip4B()">跳过 →</button>
-      <button class="btn ghost sm" style="color:#e74c3c" onclick="slAppeal(${s.id},'step4_translation')">⚖️ 复议</button>
-    </div>
-  </div>`
-}
-
 async function slSubmit4B() {
   const input = el('sl4b_input').value.trim()
   if (!input) { toast('请输入中文翻译'); return }
-  const s = SL.q4b[SL.q4bIdx]
+  const s = SL.q4[SL.q4Idx]
   const r = await api('/scheme/step/submit', 'POST', {
     course_id: SL.courseId, sentence_id: s.id,
     question_type: 'step4_translation', user_input: input,
@@ -1677,16 +1681,21 @@ async function slSubmit4B() {
   else SL.errorCount['4'] = Math.max(0, (SL.errorCount['4'] || 0) - 1)
 
   if (d.correct) {
-    el('sl4b_fb').innerHTML = `<div class="feedback correct">✅ 正确！${d.coins_earned > 0 ? ' +' + d.coins_earned + ' 金币' : ''}</div>
-      <button class="btn block" style="margin-top:8px" onclick="slNext4B()">下一题 →</button>`
+    SL.done4B.add(s.id)
+    el('sl4b_fb').innerHTML = `<div class="feedback correct">✅ 正确！${d.coins_earned > 0 ? ' +' + d.coins_earned + ' 金币' : ''}</div>`
+    const ta = el('sl4b_input'); if (ta) ta.disabled = true
+    el('sl4b_fb').parentElement.querySelectorAll('button').forEach(b => b.style.display = 'none')
+    if (SL.done4A.has(s.id)) {
+      setTimeout(() => slNext4(), 900)
+    }
   } else {
     el('sl4b_fb').innerHTML = `<div class="feedback retry">❌ 不正确，请修改后重试</div>`
     setTimeout(() => { const inp = el('sl4b_input'); if (inp) inp.focus() }, 100)
   }
 }
 
-function slSkip4B() { SL.skipped.add(SL.q4bIdx); SL.q4bIdx++; drawSLStep4B(el('step-body')) }
-function slNext4B() { SL.q4bIdx++; drawSLStep4B(el('step-body')) }
+function slSkip4() { SL.skipped4.add(SL.q4Idx); SL.q4Idx++; drawSLStep4Q(el('step-body')) }
+function slNext4() { SL.q4Idx++; drawSLStep4Q(el('step-body')) }
 
 /* ─── 回退 ─── */
 async function slFallback(fromStep) {
@@ -1714,7 +1723,7 @@ async function slAppeal(sentenceId, questionType) {
   const inp = el(inputMap[questionType])
   const userInput = inp ? inp.value.trim() : ''
   if (!userInput) { toast('请先输入答案再申请复议'); return }
-  const s = (SL.queue[SL.qIdx] || SL.q4a[SL.q4aIdx] || SL.q4b[SL.q4bIdx] || {})
+  const s = (SL.queue[SL.qIdx] || SL.q4[SL.q4Idx] || {})
   const ok = await modalConfirm(
     `申请人工复议将花费 2 金币。如果管理员判定你正确，金币会返还并补发奖励。确定申请吗？`,
     '确定复议（2 金币）', '取消')
@@ -1729,8 +1738,8 @@ async function slAppeal(sentenceId, questionType) {
   toast(r.data.message || '已申请')
   // 视为通过，让用户继续
   if (questionType === 'step3') slNext3()
-  else if (questionType === 'step4_dictation') slNext4A()
-  else slNext4B()
+  else if (questionType === 'step4_dictation') { SL.done4A.add(sentenceId); slNext4() }
+  else { SL.done4B.add(sentenceId); slNext4() }
 }
 
 /* ─── 完成步骤 ─── */
@@ -1741,7 +1750,7 @@ function finishSLStepView(body, step) {
     finishSLStep2Confirm(body)
     return
   }
-  const total = (step === 4 ? SL.q4a.length + SL.q4b.length : (step === 3 ? SL.sentences.length : 0))
+  const total = (step === 4 ? SL.q4.length : (step === 3 ? SL.sentences.length : 0))
   body.innerHTML = `<div class="card center">
     <h3>Step ${step} 完成</h3>
     ${step >= 3 ? `<p>本步获得 🪙 ${SL.coinsThisStep} 金币</p>` : ''}

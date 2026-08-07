@@ -459,6 +459,11 @@ table.tbl td.ops .btn { margin: 2px 2px; }
   .admin-content { padding: 16px; }
 }
 
+/* Step4 双框响应式：窄屏堆叠 */
+@media (max-width: 640px) {
+  .step4-grid { grid-template-columns: 1fr !important; }
+}
+
 /* ============================
    Step4 跟读：逐字对比高亮
    ============================ */
