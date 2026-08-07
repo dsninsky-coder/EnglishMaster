@@ -53,7 +53,7 @@ DEFAULT_SETTINGS = {
 }
 
 # ================= 系统版本与升级内容（登录页展示 / 数据兼容性参考） =================
-VERSION = 'v1.4.0'
+VERSION = 'v1.4.1'
 # 每个版本是否影响老数据：全部为非破坏性（仅新增列 / 受控数据重映射），无清库操作。
 # 详见 README「数据兼容性」一节；迁移前 init_db.py 会自动备份数据库。
 CHANGELOG = [
@@ -415,20 +415,23 @@ def _generate_phonetic(word):
             return (result, 'eng-to-ipa')
     except Exception:
         pass
-    # AI 兜底
-    try:
-        prompt = (
-            f'Provide ONLY the IPA phonetic transcription for the English word "{word}" '
-            f'in American English. Output ONLY the IPA symbols between slashes, nothing else. '
-            f'Example: /həˈloʊ/'
-        )
-        r = ds.call(prompt, temperature=0.1)
-        if r:
-            match = re.search(r'/([^/]+)/', r.strip())
-            if match:
-                return (f'/{match.group(1)}/', 'ai')
-    except Exception:
-        pass
+    # AI 兜底：通过系统级 API Key 调用
+    proxy = get_ai_proxy()
+    key = proxy.get('api_key')
+    if key:
+        try:
+            prompt = (
+                f'Provide ONLY the IPA phonetic transcription for the English word "{word}" '
+                f'in American English. Output ONLY the IPA symbols between slashes, nothing else. '
+                f'Example: /həˈloʊ/'
+            )
+            r = ds.call(key, prompt, base_url=proxy['base_url'], model=proxy['model'], temperature=0.1)
+            if r:
+                match = re.search(r'/([^/]+)/', r.strip())
+                if match:
+                    return (f'/{match.group(1)}/', 'ai')
+        except Exception:
+            pass
     return (None, None)
 
 
@@ -439,19 +442,22 @@ def _generate_meaning(word, context):
     返回 (meaning, source) 元组。
     """
     ctx = (context or '')[:2000]
-    try:
-        prompt = (
-            f'根据以下英文文章片段，为单词 "{word}" 生成在该语境下的中文释义。\n'
-            f'只输出中文释义（2-8个字），不要括号、不要拼音、不要例子。\n\n'
-            f'文章片段：\n{ctx}'
-        )
-        r = ds.call(prompt, temperature=0.3)
-        if r:
-            meaning = r.strip().strip('"\'。，, ')
-            if meaning and len(meaning) <= 20:
-                return (meaning, 'ai')
-    except Exception:
-        pass
+    proxy = get_ai_proxy()
+    key = proxy.get('api_key')
+    if key:
+        try:
+            prompt = (
+                f'根据以下英文文章片段，为单词 "{word}" 生成在该语境下的中文释义。\n'
+                f'只输出中文释义（2-8个字），不要括号、不要拼音、不要例子。\n\n'
+                f'文章片段：\n{ctx}'
+            )
+            r = ds.call(key, prompt, base_url=proxy['base_url'], model=proxy['model'], temperature=0.3)
+            if r:
+                meaning = r.strip().strip('"\'。，, ')
+                if meaning and len(meaning) <= 20:
+                    return (meaning, 'ai')
+        except Exception:
+            pass
     return (None, None)
 
 

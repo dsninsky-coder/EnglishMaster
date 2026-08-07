@@ -16,7 +16,9 @@ DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_MODEL = "deepseek-chat"
 
 
-def _chat(key, messages, base_url=None, model=None, temperature=0.0, raise_on_error=False):
+def _chat(key, messages, base_url=None, model=None, temperature=0.0,
+          raise_on_error=False, response_format=None):
+    """通用 Chat 接口。response_format 默认 {"type": "json_object"}，传入 None 则不强制 JSON。"""
     if not key:
         return None
     base = (base_url or DEFAULT_BASE_URL).rstrip("/")
@@ -29,8 +31,10 @@ def _chat(key, messages, base_url=None, model=None, temperature=0.0, raise_on_er
         "model": model or DEFAULT_MODEL,
         "messages": messages,
         "temperature": temperature,
-        "response_format": {"type": "json_object"},
     }
+    fmt = {"type": "json_object"} if response_format is None else response_format
+    if fmt:
+        payload["response_format"] = fmt
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=40)
         r.raise_for_status()
@@ -41,6 +45,15 @@ def _chat(key, messages, base_url=None, model=None, temperature=0.0, raise_on_er
         if raise_on_error:
             raise
         return None
+
+
+def call(key, prompt, base_url=None, model=None, temperature=0.0):
+    """便捷接口：单个 prompt，纯文本输出（不强制 JSON）。key 为 None 时返回 None。"""
+    if not key:
+        return None
+    messages = [{"role": "user", "content": prompt}]
+    return _chat(key, messages, base_url=base_url, model=model,
+                 temperature=temperature, response_format={})
 
 
 def local_similarity(a, b):

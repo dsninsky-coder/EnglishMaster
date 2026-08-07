@@ -1372,12 +1372,13 @@ async function drawSLStep1(body) {
       <h3>Step 1 · 单词熟悉</h3>
       <button class="btn ghost sm" onclick="SLGoStep(0);drawSchemeLearn()">返回步骤</button>
     </div>
-    <p class="muted">全文共 ${ws.length} 个单词 · 点击 🔊 听发音 · 熟悉音/形/义后再进入下一句</p>
+    <p class="muted">全文共 ${ws.length} 个单词 · 点击 🇺🇸美/🇬🇧英 听发音 · 熟悉音/形/义后再进入下一句</p>
     <div class="wm-grid" style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px">
-      ${ws.map(w => `<div class="wm-card" style="padding:10px;border:1px solid var(--line);border-radius:8px;cursor:pointer" onclick="playYoudao('${esc(w.word)}')">
-        <div style="display:flex;align-items:center;gap:6px">
-          <span style="font-weight:600;font-size:15px">${esc(w.word)}</span>
-          <span class="muted" style="font-size:12px">🔊</span>
+      ${ws.map(w => `<div class="wm-card" style="padding:10px;border:1px solid var(--line);border-radius:8px">
+        <div style="display:flex;align-items:center;gap:4px">
+          <span style="font-weight:600;font-size:15px;flex:1">${esc(w.word)}</span>
+          <button class="btn ghost sm" style="padding:2px 5px;font-size:11px;line-height:1" onclick="event.stopPropagation();playYoudao('${esc(w.word)}')" title="美式发音">🇺🇸</button>
+          <button class="btn ghost sm" style="padding:2px 5px;font-size:11px;line-height:1" onclick="event.stopPropagation();playYoudao('${esc(w.word)}','uk')" title="英式发音">🇬🇧</button>
         </div>
         ${w.phonetic ? `<div style="font-size:12px;color:var(--accent);margin-top:2px">${esc(w.phonetic)}</div>` : ''}
         ${w.meaning ? `<div style="font-size:13px;margin-top:2px">${esc(w.meaning)}</div>` : '<div class="muted" style="font-size:12px">未设置释义</div>'}

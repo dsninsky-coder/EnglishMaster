@@ -1331,20 +1331,37 @@ async function openSchemeItems(id) {
 
 function selectAllSchemeSteps() {
   const ids = window._schCourseIds || []
+  // 检查是否当前已全选：反选模式
+  const allChecked = ids.every(cid =>
+    [1, 2, 3, 4].every(s => {
+      const cb = document.querySelector(`.sch-step-${cid}[value="${s}"]`)
+      return cb && cb.checked
+    })
+  )
+  const target = !allChecked
   ids.forEach(cid => {
     [1, 2, 3, 4].forEach(s => {
       const cb = document.querySelector(`.sch-step-${cid}[value="${s}"]`)
-      if (cb) cb.checked = true
+      if (cb) cb.checked = target
     })
   })
 }
 
 function selectSchemeSteps123() {
   const ids = window._schCourseIds || []
+  // 反选：如果当前已处于「仅1-3」状态则全部取消
+  const already123 = ids.every(cid => {
+    const c1 = document.querySelector(`.sch-step-${cid}[value="1"]`)
+    const c2 = document.querySelector(`.sch-step-${cid}[value="2"]`)
+    const c3 = document.querySelector(`.sch-step-${cid}[value="3"]`)
+    const c4 = document.querySelector(`.sch-step-${cid}[value="4"]`)
+    return c1 && c1.checked && c2 && c2.checked && c3 && c3.checked && c4 && !c4.checked
+  })
+  const target = !already123
   ids.forEach(cid => {
     [1, 2, 3].forEach(s => {
       const cb = document.querySelector(`.sch-step-${cid}[value="${s}"]`)
-      if (cb) cb.checked = true
+      if (cb) cb.checked = target
     })
     const cb4 = document.querySelector(`.sch-step-${cid}[value="4"]`)
     if (cb4) cb4.checked = false
@@ -1353,10 +1370,19 @@ function selectSchemeSteps123() {
 
 function selectSchemeSteps34() {
   const ids = window._schCourseIds || []
+  // 反选：如果当前已处于「仅3-4」状态则全部取消
+  const already34 = ids.every(cid => {
+    const c1 = document.querySelector(`.sch-step-${cid}[value="1"]`)
+    const c2 = document.querySelector(`.sch-step-${cid}[value="2"]`)
+    const c3 = document.querySelector(`.sch-step-${cid}[value="3"]`)
+    const c4 = document.querySelector(`.sch-step-${cid}[value="4"]`)
+    return c1 && !c1.checked && c2 && !c2.checked && c3 && c3.checked && c4 && c4.checked
+  })
+  const target = !already34
   ids.forEach(cid => {
     [3, 4].forEach(s => {
       const cb = document.querySelector(`.sch-step-${cid}[value="${s}"]`)
-      if (cb) cb.checked = true
+      if (cb) cb.checked = target
     })
     const cb1 = document.querySelector(`.sch-step-${cid}[value="1"]`)
     if (cb1) cb1.checked = false
